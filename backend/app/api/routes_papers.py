@@ -1,0 +1,211 @@
+"""Paper upload, listing, retrieval, deletion, and semantic search."""
+
+from __future__ import annotations
+
+import logging
+import time
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from fastapi.responses import FileResponse
+from sqlmodel import Session, select
+
+from app.database import get_session
+from app.models import Chunk, Paper, PaperStatus
+from app.schemas import (
+    PaperSummary,
+    SearchHit,
+    SearchRequest,
+    SearchResponse,
+    UploadResponse,
+    UploadResultItem,
+)
+from app.services.ingestion import IngestionError, delete_paper, process_paper, store_upload
+from app.services.vector_store import get_vector_store
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/papers", tags=["papers"])
+
+MAX_FILES_PER_REQUEST = 20
+
+
+@router.post("/upload", response_model=UploadResponse, summary="Upload and index PDFs")
+async def upload_papers(
+    files: list[UploadFile] = File(..., description="One or more PDF files"),
+    session: Session = Depends(get_session),
+) -> UploadResponse:
+    """Steps 1-5: store the PDF, extract text, chunk, embed and index it.
+
+    Ingestion runs synchronously so the client gets a definitive per-file result.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files were provided.")
+    if len(files) > MAX_FILES_PER_REQUEST:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Upload at most {MAX_FILES_PER_REQUEST} files per request.",
+        )
+
+    results: list[UploadResultItem] = []
+
+    for upload in files:
+        filename = upload.filename or "paper.pdf"
+        try:
+            data = await upload.read()
+            paper, created = store_upload(session, filename, data)
+
+            if not created and paper.status == PaperStatus.INDEXED:
+                results.append(
+                    UploadResultItem(
+                        filename=filename,
+                        paper_id=paper.id,
+                        status="duplicate",
+                        detail="This PDF is already indexed.",
+                        paper=PaperSummary.from_model(paper),
+                    )
+                )
+                continue
+
+            paper = process_paper(session, paper.id)
+            results.append(
+                UploadResultItem(
+                    filename=filename,
+                    paper_id=paper.id,
+                    status="indexed",
+                    detail=f"Indexed {paper.chunk_count} chunks from {paper.page_count} pages.",
+                    paper=PaperSummary.from_model(paper),
+                )
+            )
+        except IngestionError as exc:
+            results.append(UploadResultItem(filename=filename, status="failed", detail=str(exc)))
+        except Exception as exc:  # pragma: no cover - unexpected
+            logger.exception("Upload failed for %s", filename)
+            results.append(UploadResultItem(filename=filename, status="failed", detail=str(exc)))
+        finally:
+            await upload.close()
+
+    return UploadResponse(
+        uploaded=len(results),
+        indexed=sum(1 for r in results if r.status == "indexed"),
+        duplicates=sum(1 for r in results if r.status == "duplicate"),
+        failed=sum(1 for r in results if r.status == "failed"),
+        results=results,
+    )
+
+
+@router.get("", response_model=list[PaperSummary], summary="List papers")
+def list_papers(
+    status: PaperStatus | None = Query(default=None),
+    q: str | None = Query(default=None, description="Filter by title/author substring"),
+    session: Session = Depends(get_session),
+) -> list[PaperSummary]:
+    statement = select(Paper)
+    if status:
+        statement = statement.where(Paper.status == status)
+    papers = list(session.exec(statement).all())
+
+    if q:
+        needle = q.lower()
+        papers = [
+            paper
+            for paper in papers
+            if needle in (paper.title or "").lower()
+            or needle in (paper.filename or "").lower()
+            or any(needle in author.lower() for author in (paper.authors or []))
+        ]
+
+    papers.sort(key=lambda p: p.created_at, reverse=True)
+    return [PaperSummary.from_model(paper) for paper in papers]
+
+
+@router.get("/{paper_id}", response_model=PaperSummary, summary="Get one paper")
+def get_paper(paper_id: str, session: Session = Depends(get_session)) -> PaperSummary:
+    paper = session.get(Paper, paper_id)
+    if paper is None:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+    return PaperSummary.from_model(paper)
+
+
+@router.get("/{paper_id}/chunks", summary="List a paper's chunks")
+def get_paper_chunks(
+    paper_id: str,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    session: Session = Depends(get_session),
+) -> dict:
+    if session.get(Paper, paper_id) is None:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+
+    rows = list(
+        session.exec(
+            select(Chunk).where(Chunk.paper_id == paper_id).order_by(Chunk.index).offset(offset).limit(limit)
+        ).all()
+    )
+    total = len(list(session.exec(select(Chunk.id).where(Chunk.paper_id == paper_id)).all()))
+    return {
+        "paper_id": paper_id,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "chunks": [
+            {
+                "id": row.id,
+                "index": row.index,
+                "text": row.text,
+                "page_start": row.page_start,
+                "page_end": row.page_end,
+                "section": row.section,
+                "token_estimate": row.token_estimate,
+            }
+            for row in rows
+        ],
+    }
+
+
+@router.get("/{paper_id}/file", summary="Download the original PDF")
+def download_paper(paper_id: str, session: Session = Depends(get_session)) -> FileResponse:
+    paper = session.get(Paper, paper_id)
+    if paper is None:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+    path = Path(paper.file_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="The stored PDF file is missing.")
+    return FileResponse(path, media_type="application/pdf", filename=paper.filename)
+
+
+@router.post("/{paper_id}/reindex", response_model=PaperSummary, summary="Re-run ingestion")
+def reindex_paper(paper_id: str, session: Session = Depends(get_session)) -> PaperSummary:
+    if session.get(Paper, paper_id) is None:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+    try:
+        paper = process_paper(session, paper_id)
+    except IngestionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PaperSummary.from_model(paper)
+
+
+@router.delete(
+    "/{paper_id}",
+    status_code=204,
+    response_class=Response,
+    summary="Delete a paper and its artefacts",
+)
+def remove_paper(paper_id: str, session: Session = Depends(get_session)) -> Response:
+    if not delete_paper(session, paper_id):
+        raise HTTPException(status_code=404, detail="Paper not found.")
+    return Response(status_code=204)
+
+
+@router.post("/search", response_model=SearchResponse, summary="Semantic search over all chunks")
+def search_papers(payload: SearchRequest) -> SearchResponse:
+    started = time.perf_counter()
+    hits = get_vector_store().search(
+        payload.query,
+        top_k=payload.top_k,
+        paper_ids=payload.paper_ids or None,
+    )
+    return SearchResponse(
+        query=payload.query,
+        hits=[SearchHit(**hit.to_dict()) for hit in hits],
+        took_ms=int((time.perf_counter() - started) * 1000),
+    )
