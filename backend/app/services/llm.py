@@ -10,20 +10,55 @@ Responsibilities:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from typing import Any
 
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception_type, wait_exponential
 
 from app.config import settings
+from app.services import llm_cache
 
 logger = logging.getLogger(__name__)
 
 JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+
+# A *global* ceiling on in-flight requests. Per-call-site limits are not enough:
+# the review pipeline fans out into concurrent branches, and each branch fans out
+# again per paper, so independent limits would multiply and trip the provider's
+# per-minute quota. Every call passes through this one gate.
+_inflight = threading.Semaphore(max(1, settings.llm_max_concurrency))
+
+# The installed google-genai has no client-side timeout, so a stalled request
+# blocks forever — observed as a ten-minute hang on a single question. We impose
+# the deadline ourselves by running the blocking SDK call on a worker and giving
+# up on the *wait*. The abandoned worker cannot be killed, so the pool is sized
+# well above the concurrency gate to absorb a few of them.
+_call_pool = ThreadPoolExecutor(
+    max_workers=max(8, settings.llm_max_concurrency * 4),
+    thread_name_prefix="gemini",
+)
+
+MAX_ATTEMPTS = 4
+
+
+def _stop_retrying(retry_state) -> bool:
+    """Stop after N attempts, or once the whole loop exceeds its time budget.
+
+    Read as a callable rather than composed from `stop_after_delay(...)` at
+    import time: a decorator argument captures the setting's value once, which
+    silently ignores any later configuration change.
+    """
+    if retry_state.attempt_number >= MAX_ATTEMPTS:
+        return True
+    elapsed = retry_state.seconds_since_start or 0
+    return elapsed >= max(1, settings.llm_total_retry_seconds)
 
 
 class LLMError(RuntimeError):
@@ -98,6 +133,7 @@ class LLMResponse:
     prompt_tokens: int = 0
     output_tokens: int = 0
     stubbed: bool = False
+    cached: bool = False
 
 
 class GeminiClient:
@@ -133,24 +169,34 @@ class GeminiClient:
     # reach that far or a multi-agent run gives up on the first burst of 429s.
     @retry(
         retry=retry_if_exception_type(TransientLLMError),
-        stop=stop_after_attempt(4),
+        stop=_stop_retrying,
         wait=wait_exponential(multiplier=2, min=5, max=65),
         reraise=True,
     )
-    def _call(self, contents: str, config: dict[str, Any]) -> Any:
+    def _call(self, contents: Any, config: dict[str, Any]) -> Any:
         from google.genai import types
 
         client = self._ensure_client()
-        try:
-            return client.models.generate_content(
+        timeout = max(5, settings.llm_timeout_seconds)
+
+        with _inflight:
+            future = _call_pool.submit(
+                client.models.generate_content,
                 model=self.model,
                 contents=contents,
                 config=types.GenerateContentConfig(**config),
             )
-        except LLMError:
-            raise
-        except Exception as exc:  # pragma: no cover - network dependent
-            raise classify_provider_error(str(exc)) from exc
+            try:
+                return future.result(timeout=timeout)
+            except FuturesTimeout as exc:
+                future.cancel()
+                raise TransientLLMError(
+                    f"Gemini did not respond within {timeout}s."
+                ) from exc
+            except LLMError:
+                raise
+            except Exception as exc:  # pragma: no cover - network dependent
+                raise classify_provider_error(str(exc)) from exc
 
     def generate(
         self,
@@ -160,10 +206,36 @@ class GeminiClient:
         max_output_tokens: int | None = None,
         response_mime_type: str | None = None,
         response_schema: dict[str, Any] | None = None,
+        use_cache: bool = True,
     ) -> LLMResponse:
+        resolved_temperature = self.temperature if temperature is None else temperature
+        resolved_max_tokens = max_output_tokens or settings.gemini_max_output_tokens
+
+        # A cache hit is a legitimate substitute only if every input that could
+        # change the answer matches, so the key covers all of them.
+        key = llm_cache.cache_key(
+            model=self.model,
+            prompt=prompt,
+            system_instruction=system_instruction,
+            temperature=resolved_temperature,
+            max_output_tokens=resolved_max_tokens,
+            response_mime_type=response_mime_type,
+            response_schema=response_schema,
+        )
+        if use_cache:
+            hit = llm_cache.lookup(key)
+            if hit is not None:
+                return LLMResponse(
+                    text=hit.response_text,
+                    model=hit.model,
+                    prompt_tokens=hit.prompt_tokens,
+                    output_tokens=hit.output_tokens,
+                    cached=True,
+                )
+
         config: dict[str, Any] = {
-            "temperature": self.temperature if temperature is None else temperature,
-            "max_output_tokens": max_output_tokens or settings.gemini_max_output_tokens,
+            "temperature": resolved_temperature,
+            "max_output_tokens": resolved_max_tokens,
         }
         if system_instruction:
             config["system_instruction"] = system_instruction
@@ -178,12 +250,79 @@ class GeminiClient:
             raise LLMError("Gemini returned an empty response (possibly blocked by a safety filter).")
 
         usage = getattr(response, "usage_metadata", None)
-        return LLMResponse(
+        result = LLMResponse(
             text=text,
             model=self.model,
             prompt_tokens=int(getattr(usage, "prompt_token_count", 0) or 0),
             output_tokens=int(getattr(usage, "candidates_token_count", 0) or 0),
         )
+
+        if use_cache:
+            llm_cache.store(
+                key,
+                model=self.model,
+                response_text=result.text,
+                prompt_tokens=result.prompt_tokens,
+                output_tokens=result.output_tokens,
+                prompt_preview=prompt[:300],
+            )
+        return result
+
+    def generate_from_image(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str = "image/png",
+        temperature: float | None = None,
+        max_output_tokens: int | None = None,
+        use_cache: bool = True,
+    ) -> str:
+        """Generate from a prompt plus one image (page scans, figures, charts).
+
+        Cached on a hash of the image rather than the bytes themselves, so a
+        repeated request is free without storing the image in the cache row.
+        """
+        from google.genai import types
+
+        image_digest = hashlib.sha256(image_bytes).hexdigest()
+        resolved_temperature = self.temperature if temperature is None else temperature
+        resolved_max_tokens = max_output_tokens or settings.gemini_max_output_tokens
+
+        key = llm_cache.cache_key(
+            model=self.model,
+            prompt=f"{prompt}\n[image:{mime_type}:{image_digest}]",
+            system_instruction=None,
+            temperature=resolved_temperature,
+            max_output_tokens=resolved_max_tokens,
+            response_mime_type=None,
+            response_schema=None,
+        )
+        if use_cache:
+            hit = llm_cache.lookup(key)
+            if hit is not None:
+                return hit.response_text
+
+        contents = [
+            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+            prompt,
+        ]
+        response = self._call(
+            contents,
+            {"temperature": resolved_temperature, "max_output_tokens": resolved_max_tokens},
+        )
+        text = (getattr(response, "text", None) or "").strip()
+
+        if use_cache and text:
+            usage = getattr(response, "usage_metadata", None)
+            llm_cache.store(
+                key,
+                model=self.model,
+                response_text=text,
+                prompt_tokens=int(getattr(usage, "prompt_token_count", 0) or 0),
+                output_tokens=int(getattr(usage, "candidates_token_count", 0) or 0),
+                prompt_preview=prompt[:300],
+            )
+        return text
 
     def generate_json(
         self,
@@ -192,6 +331,7 @@ class GeminiClient:
         schema: dict[str, Any] | None = None,
         temperature: float | None = None,
         max_output_tokens: int | None = None,
+        use_cache: bool = True,
     ) -> dict[str, Any]:
         """Generate and parse a JSON object, repairing common formatting slips."""
         response = self.generate(
@@ -201,6 +341,7 @@ class GeminiClient:
             max_output_tokens=max_output_tokens,
             response_mime_type="application/json",
             response_schema=schema,
+            use_cache=use_cache,
         )
         return parse_json_object(response.text)
 
