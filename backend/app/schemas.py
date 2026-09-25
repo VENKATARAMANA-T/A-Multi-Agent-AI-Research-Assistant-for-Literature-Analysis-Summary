@@ -22,11 +22,16 @@ class PaperSummary(BaseModel):
     keywords: list[str] = Field(default_factory=list)
     page_count: int = 0
     chunk_count: int = 0
+    figure_count: int = 0
     char_count: int = 0
     size_bytes: int = 0
     status: PaperStatus
     error: Optional[str] = None
     sections: list[str] = Field(default_factory=list)
+    text_source: str = "native"
+    ocr_pages: list[int] = Field(default_factory=list)
+    ocr_confidence: Optional[float] = None
+    ocr_engine: Optional[str] = None
     created_at: datetime
 
     @classmethod
@@ -43,11 +48,16 @@ class PaperSummary(BaseModel):
             keywords=paper.keywords or [],
             page_count=paper.page_count,
             chunk_count=paper.chunk_count,
+            figure_count=paper.figure_count or 0,
             char_count=paper.char_count,
             size_bytes=paper.size_bytes,
             status=paper.status,
             error=paper.error,
             sections=sorted((paper.sections or {}).keys()),
+            text_source=paper.text_source or "native",
+            ocr_pages=paper.ocr_pages or [],
+            ocr_confidence=paper.ocr_confidence,
+            ocr_engine=paper.ocr_engine,
             created_at=paper.created_at,
         )
 
@@ -68,6 +78,85 @@ class UploadResponse(BaseModel):
     results: list[UploadResultItem]
 
 
+class FigureSummary(BaseModel):
+    id: str
+    paper_id: str
+    paper_title: Optional[str] = None
+    kind: str
+    label: str
+    caption: str
+    page: int
+    status: str
+    detector: str = "caption"
+    has_image: bool = False
+
+    table_markdown: Optional[str] = None
+    table_rows: int = 0
+    table_cols: int = 0
+
+    chart_type: Optional[str] = None
+    description: Optional[str] = None
+    takeaway: Optional[str] = None
+    axes: dict[str, Any] = Field(default_factory=dict)
+    series: list[Any] = Field(default_factory=list)
+    findings: list[str] = Field(default_factory=list)
+    entities: dict[str, Any] = Field(default_factory=dict)
+    analysis_error: Optional[str] = None
+
+    @classmethod
+    def from_model(cls, figure: Any, paper_title: str | None = None) -> "FigureSummary":
+        from pathlib import Path
+
+        return cls(
+            id=figure.id,
+            paper_id=figure.paper_id,
+            paper_title=paper_title,
+            kind=figure.kind,
+            label=figure.label,
+            caption=figure.caption,
+            page=figure.page,
+            status=figure.status.value if hasattr(figure.status, "value") else str(figure.status),
+            detector=figure.detector,
+            has_image=bool(figure.image_path and Path(figure.image_path).exists()),
+            table_markdown=figure.table_markdown,
+            table_rows=figure.table_rows,
+            table_cols=figure.table_cols,
+            chart_type=figure.chart_type,
+            description=figure.description,
+            takeaway=figure.takeaway,
+            axes=figure.axes or {},
+            series=figure.series or [],
+            findings=figure.findings or [],
+            entities=figure.entities or {},
+            analysis_error=figure.analysis_error,
+        )
+
+
+class FigureCostEstimate(BaseModel):
+    paper_ids: list[str] = Field(default_factory=list)
+    pending: int = 0
+    requests_required: int = 0
+    capped_at: int = 0
+    already_readable: int = 0
+
+
+class FigureAnalysisRequest(BaseModel):
+    paper_ids: list[str] = Field(default_factory=list)
+    figure_ids: list[str] = Field(default_factory=list)
+    limit: Optional[int] = Field(default=None, ge=1, le=100)
+
+
+class FigureAnalysisResponse(BaseModel):
+    analysed: int
+    failed: int
+    remaining: int
+    llm_calls: int
+    duration_ms: int
+    errors: list[str] = Field(default_factory=list)
+    figures: list[FigureSummary] = Field(default_factory=list)
+    detail: Optional[str] = None
+
+
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     paper_ids: list[str] = Field(default_factory=list)
@@ -83,6 +172,10 @@ class SearchHit(BaseModel):
     page_start: Optional[int] = None
     page_end: Optional[int] = None
     section: Optional[str] = None
+    source: str = "native"
+    kind: str = "text"
+    figure_id: Optional[str] = None
+    label: Optional[str] = None
 
 
 class SearchResponse(BaseModel):
@@ -95,6 +188,9 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=3, max_length=2000)
     paper_ids: list[str] = Field(default_factory=list)
     top_k: int = Field(default=8, ge=1, le=30)
+    # Continue an existing thread, so a follow-up can say "why?" and be understood.
+    conversation_id: Optional[str] = None
+    start_conversation: bool = False
 
 
 class PaperIdsRequest(BaseModel):
@@ -107,6 +203,76 @@ class SummarizeRequest(PaperIdsRequest):
 
 class GapRequest(PaperIdsRequest):
     focus: Optional[str] = Field(default=None, max_length=500)
+
+
+class HighlightResponse(BaseModel):
+    page: int
+    rects: list[list[float]] = Field(default_factory=list)
+    matched_phrase: Optional[str] = None
+    found: bool = False
+    page_width: float = 0
+    page_height: float = 0
+
+
+class ExplainRequest(BaseModel):
+    text: str = Field(min_length=10, max_length=8000)
+    level: Literal["simple", "standard", "technical"] = "standard"
+    paper_id: Optional[str] = None
+    surrounding: Optional[str] = Field(default=None, max_length=8000)
+
+
+class ExplainResponse(BaseModel):
+    explanation: Optional[str] = None
+    terms: list[dict[str, Any]] = Field(default_factory=list)
+    background: Optional[str] = None
+    why_it_matters: Optional[str] = None
+    caveats: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    status: str = "completed"
+
+
+class CitationResponse(BaseModel):
+    style: str
+    text: str
+    count: int = 1
+
+
+class MatrixColumn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=400)
+    type: Literal["text", "number", "boolean", "list"] = "text"
+
+
+class MatrixRequest(BaseModel):
+    columns: list[MatrixColumn]
+    paper_ids: list[str] = Field(default_factory=list)
+    name: Optional[str] = Field(default=None, max_length=200)
+
+
+class MatrixResponse(BaseModel):
+    id: Optional[str] = None
+    name: str = ""
+    columns: list[dict[str, Any]] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    llm_calls: int = 0
+    duration_ms: int = 0
+    status: str = "completed"
+
+
+class MatrixRunSummary(BaseModel):
+    id: str
+    name: str
+    paper_count: int
+    column_count: int
+    created_at: datetime
+
+
+class DiscoveryResponse(BaseModel):
+    query: str
+    source: str = "openalex"
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    excluded_known: bool = True
 
 
 class AgentRunResponse(BaseModel):
@@ -125,6 +291,7 @@ class AgentRunResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
     llm_calls: int = 0
     duration_ms: int = 0
+    conversation_id: Optional[str] = None
 
 
 class GraphNode(BaseModel):
@@ -184,6 +351,7 @@ class HealthResponse(BaseModel):
     embeddings: dict[str, Any]
     vector_store: dict[str, Any]
     graph: dict[str, Any]
+    ocr: dict[str, Any] = Field(default_factory=dict)
     papers: dict[str, Any]
 
 

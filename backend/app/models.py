@@ -49,6 +49,14 @@ class Paper(SQLModel, table=True):
     page_count: int = 0
     char_count: int = 0
     chunk_count: int = 0
+    figure_count: int = 0
+
+    # --- OCR provenance ------------------------------------------------------
+    # "native" (text layer), "ocr" (every page recognised) or "mixed".
+    text_source: str = Field(default="native")
+    ocr_pages: list[int] = Field(default_factory=list, sa_column=Column(JSON))
+    ocr_confidence: Optional[float] = None
+    ocr_engine: Optional[str] = None
 
     status: PaperStatus = Field(default=PaperStatus.UPLOADED, index=True)
     error: Optional[str] = Field(default=None, sa_column=Column(Text))
@@ -71,7 +79,70 @@ class Chunk(SQLModel, table=True):
     page_end: Optional[int] = None
     section: Optional[str] = None
     token_estimate: int = 0
+    # "native" or "ocr" — lets a search result flag text that may be imperfect.
+    source: str = Field(default="native")
     created_at: datetime = Field(default_factory=utcnow)
+
+
+class FigureStatus(str, Enum):
+    PENDING = "pending"      # extracted, not yet analysed by the vision model
+    ANALYSED = "analysed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class Figure(SQLModel, table=True):
+    """A figure, chart, diagram or table lifted out of a paper.
+
+    Extraction is free and happens during ingestion. Analysis costs one vision
+    request per figure, so it is a separate, opt-in step — see FigureStatus.
+    """
+
+    __tablename__ = "figures"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    paper_id: str = Field(index=True, foreign_key="papers.id")
+
+    kind: str = Field(default="figure", index=True)  # figure | table | chart | algorithm
+    label: str = ""                                   # "Figure 3"
+    caption: str = Field(default="", sa_column=Column(Text))
+    page: int = 0
+    bbox: list[float] = Field(default_factory=list, sa_column=Column(JSON))
+    image_path: Optional[str] = None
+    detector: str = "caption"
+
+    # Tables carry their content directly; no vision call needed to read them.
+    table_markdown: Optional[str] = Field(default=None, sa_column=Column(Text))
+    table_rows: int = 0
+    table_cols: int = 0
+
+    # --- vision analysis -----------------------------------------------------
+    status: FigureStatus = Field(default=FigureStatus.PENDING, index=True)
+    description: Optional[str] = Field(default=None, sa_column=Column(Text))
+    chart_type: Optional[str] = None
+    axes: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    series: list[Any] = Field(default_factory=list, sa_column=Column(JSON))
+    findings: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    takeaway: Optional[str] = Field(default=None, sa_column=Column(Text))
+    entities: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    analysis_error: Optional[str] = Field(default=None, sa_column=Column(Text))
+    analysed_at: Optional[datetime] = None
+
+    created_at: datetime = Field(default_factory=utcnow)
+
+    @property
+    def search_text(self) -> str:
+        """What gets embedded so this figure is findable by meaning."""
+        parts = [self.label, self.caption]
+        if self.description:
+            parts.append(self.description)
+        if self.findings:
+            parts.extend(self.findings)
+        if self.takeaway:
+            parts.append(self.takeaway)
+        if self.table_markdown:
+            parts.append(self.table_markdown)
+        return "\n".join(part for part in parts if part)
 
 
 class ExtractionRecord(SQLModel, table=True):
@@ -93,6 +164,44 @@ class SummaryRecord(SQLModel, table=True):
     scope: str = "single"  # single | multi
     paper_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     payload: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class Conversation(SQLModel, table=True):
+    """A multi-turn question-and-answer thread over a set of papers.
+
+    Without this, every question is asked cold and a follow-up like "why?" has
+    nothing to refer back to.
+    """
+
+    __tablename__ = "conversations"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    title: str = ""
+    paper_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    # [{role: "user"|"assistant", content: str, sources: [...], at: iso}]
+    messages: list[Any] = Field(default_factory=list, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    @property
+    def turn_count(self) -> int:
+        return sum(1 for message in (self.messages or []) if message.get("role") == "user")
+
+
+class MatrixRun(SQLModel, table=True):
+    """A saved custom-column comparison across papers."""
+
+    __tablename__ = "matrix_runs"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    name: str = ""
+    paper_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    columns: list[Any] = Field(default_factory=list, sa_column=Column(JSON))
+    rows: list[Any] = Field(default_factory=list, sa_column=Column(JSON))
+    errors: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    llm_calls: int = 0
+    duration_ms: int = 0
     created_at: datetime = Field(default_factory=utcnow)
 
 
