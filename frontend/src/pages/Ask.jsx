@@ -10,12 +10,24 @@ const SUGGESTIONS = [
   'What datasets are used across these papers?',
   'How do the proposed methods differ from prior work?',
   'What limitations do the authors acknowledge?',
-  'Which evaluation metrics are reported, and on what benchmarks?',
+  // Relational: answered by the links between papers, not by any one passage.
+  'Which methods were evaluated on the same dataset?',
+];
+
+const MODES = [
+  ['hybrid', 'Hybrid', 'Passages plus the relationships between them. Best for most questions.'],
+  ['vector', 'Passages', 'Text excerpts only — the classic retrieval-augmented answer.'],
+  [
+    'graph',
+    'Relationships',
+    'Knowledge graph only. Answers questions about how things relate, which no single passage contains.',
+  ],
 ];
 
 export default function Ask() {
   const { effectiveIds, indexedPapers, llmReady } = useCorpus();
   const [question, setQuestion] = useState('');
+  const [mode, setMode] = useState('hybrid');
   const [topK, setTopK] = useState(8);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -34,7 +46,12 @@ export default function Ask() {
     setBusy(true);
     setError(null);
     try {
-      const result = await api.ask({ question: text, paper_ids: effectiveIds, top_k: topK });
+      const result = await api.ask({
+        question: text,
+        paper_ids: effectiveIds,
+        top_k: topK,
+        mode,
+      });
       setHistory((current) => [...current, { question: text, result }]);
       setQuestion('');
     } catch (err) {
@@ -184,6 +201,44 @@ export default function Ask() {
                   </p>
                 )}
 
+                {entry.result.answer?.graph_sources?.length > 0 && (
+                  <div className="sources">
+                    <h4>Cited relationships</h4>
+                    {entry.result.answer.graph_sources.map((fact) => (
+                      <div key={fact.marker} className="source">
+                        <div className="source-head">
+                          <Badge tone="success">{fact.marker}</Badge>
+                          <strong>{fact.sentence}</strong>
+                        </div>
+                        <p className="source-excerpt">
+                          From {fact.paper_titles?.join(', ') || 'the knowledge graph'}
+                          {fact.evidence ? ` — “${fact.evidence}”` : ''}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {entry.result.graph_facts?.length > 0 && (
+                  <details className="retrieved">
+                    <summary>
+                      {entry.result.graph_facts.length} relationships from the graph
+                      {entry.result.graph_matches?.length > 0 &&
+                        ` · matched ${entry.result.graph_matches.map((m) => m.name).join(', ')}`}
+                    </summary>
+                    <ul>
+                      {entry.result.graph_facts.slice(0, 20).map((fact, i) => (
+                        <li key={i}>
+                          <span className="muted">[G{i + 1}]</span> {fact.sentence}
+                          {fact.paper_titles?.length > 0 && (
+                            <div className="cell-sub">{fact.paper_titles.join(', ')}</div>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+
                 {entry.result.retrieved?.length > 0 && (
                   <details className="retrieved">
                     <summary>{entry.result.retrieved.length} retrieved chunks</summary>
@@ -236,6 +291,21 @@ export default function Ask() {
               disabled={indexedPapers.length === 0}
             />
             <div className="ask-controls">
+              <label className="field-inline">
+                Using
+                <select
+                  className="input input-select"
+                  value={mode}
+                  onChange={(event) => setMode(event.target.value)}
+                  title={MODES.find(([key]) => key === mode)?.[2]}
+                >
+                  {MODES.map(([key, label]) => (
+                    <option key={key} value={key}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="field-inline">
                 Top-k
                 <input
