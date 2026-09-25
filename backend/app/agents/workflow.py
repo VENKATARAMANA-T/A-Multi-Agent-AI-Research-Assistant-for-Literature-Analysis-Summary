@@ -189,11 +189,13 @@ def run_workflow(
     }
 
     if persist:
-        _persist_run(result, error)
+        # The id goes back to the caller so a result can be handed to the
+        # Verification Agent later without re-running the whole workflow.
+        result["run_id"] = _persist_run(result, error)
     return result
 
 
-def _persist_run(result: dict[str, Any], error: str | None) -> None:
+def _persist_run(result: dict[str, Any], error: str | None) -> str | None:
     """Write an audit record; never let bookkeeping break the request."""
     try:
         from app.database import session_scope
@@ -205,18 +207,19 @@ def _persist_run(result: dict[str, Any], error: str | None) -> None:
             if result.get(key)
         }
         with session_scope() as session:
-            session.add(
-                AgentRun(
-                    intent=str(result["intent"]),
-                    question=result.get("question"),
-                    paper_ids=result.get("paper_ids") or [],
-                    status=str(result["status"]),
-                    trace=result.get("trace") or [],
-                    result=payload,
-                    error=error or ("; ".join(result["errors"]) if result["errors"] else None),
-                    duration_ms=int(result["duration_ms"]),
-                )
+            run = AgentRun(
+                intent=str(result["intent"]),
+                question=result.get("question"),
+                paper_ids=result.get("paper_ids") or [],
+                status=str(result["status"]),
+                trace=result.get("trace") or [],
+                result=payload,
+                error=error or ("; ".join(result["errors"]) if result["errors"] else None),
+                duration_ms=int(result["duration_ms"]),
             )
+            session.add(run)
             session.commit()
+            return run.id
     except Exception:  # pragma: no cover
         logger.warning("Could not persist agent run", exc_info=True)
+        return None

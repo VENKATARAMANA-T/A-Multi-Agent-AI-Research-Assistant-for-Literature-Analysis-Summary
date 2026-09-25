@@ -257,6 +257,37 @@ class AgentRun(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class VerificationRecord(SQLModel, table=True):
+    """The result of fact-checking a piece of generated text against the corpus.
+
+    Kept rather than recomputed: a verification costs two model calls, and the
+    point of an audit is that you can look at it again later.
+    """
+
+    __tablename__ = "verifications"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+
+    # What was checked. `agent_run_id` is set when the text came from a stored
+    # run, which is what links a verdict back to the agent that earned it.
+    agent_run_id: Optional[str] = Field(default=None, index=True, foreign_key="agent_runs.id")
+    source: str = Field(default="text", index=True)  # qa | summary | gaps | text
+    subject: Optional[str] = Field(default=None, sa_column=Column(Text))
+    text: str = Field(default="", sa_column=Column(Text))
+    paper_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+
+    # Outcome.
+    score: float = 0.0
+    claims: list[Any] = Field(default_factory=list, sa_column=Column(JSON))
+    counts: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    checked: int = 0
+    status: str = "completed"
+    errors: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    llm_calls: int = 0
+    duration_ms: int = 0
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class Report(SQLModel, table=True):
     __tablename__ = "reports"
 

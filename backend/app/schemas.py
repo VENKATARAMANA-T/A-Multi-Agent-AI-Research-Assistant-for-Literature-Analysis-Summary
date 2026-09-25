@@ -331,6 +331,7 @@ class DiscoveryResponse(BaseModel):
 
 
 class AgentRunResponse(BaseModel):
+    run_id: Optional[str] = None
     intent: str
     status: str
     question: Optional[str] = None
@@ -349,6 +350,54 @@ class AgentRunResponse(BaseModel):
     llm_calls: int = 0
     duration_ms: int = 0
     conversation_id: Optional[str] = None
+
+
+class VerifyRequest(BaseModel):
+    """Verify either a stored agent run, or a piece of text pasted in directly."""
+
+    agent_run_id: Optional[str] = None
+    text: Optional[str] = Field(default=None, max_length=20_000)
+    paper_ids: list[str] = Field(default_factory=list)
+    source: str = Field(default="text", max_length=32)
+    subject: Optional[str] = Field(default=None, max_length=500)
+    evidence_per_claim: int = Field(default=4, ge=1, le=10)
+    save: bool = True
+
+
+class VerifyResponse(BaseModel):
+    id: Optional[str] = None
+    source: str = "text"
+    subject: Optional[str] = None
+    status: str = "completed"
+    score: float = 0.0
+    checked: int = 0
+    counts: dict[str, Any] = Field(default_factory=dict)
+    claims: list[dict[str, Any]] = Field(default_factory=list)
+    problems: list[dict[str, Any]] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    llm_calls: int = 0
+    duration_ms: int = 0
+    trace: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class VerificationSummary(BaseModel):
+    id: str
+    agent_run_id: Optional[str] = None
+    source: str
+    subject: Optional[str] = None
+    score: float
+    checked: int
+    counts: dict[str, Any] = Field(default_factory=dict)
+    status: str
+    llm_calls: int = 0
+    created_at: datetime
+
+
+class VerificationDetail(VerificationSummary):
+    text: str = ""
+    paper_ids: list[str] = Field(default_factory=list)
+    claims: list[dict[str, Any]] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
 
 
 class GraphNode(BaseModel):
