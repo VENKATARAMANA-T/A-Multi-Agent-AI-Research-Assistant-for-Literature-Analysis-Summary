@@ -55,6 +55,28 @@ class SentenceTransformerEmbedder(Embedder):
         return [vector.tolist() for vector in vectors]
 
 
+class FastEmbedEmbedder(Embedder):
+    """ONNX-backed MiniLM — same model as sentence-transformers, less overhead.
+
+    Typically 2-3x faster than the PyTorch path on CPU, which is what the whole
+    corpus is embedded on. Optional: if `fastembed` is not installed we fall
+    back to sentence-transformers rather than failing.
+    """
+
+    def __init__(self, model_name: str) -> None:
+        from fastembed import TextEmbedding  # imported lazily
+
+        self._model = TextEmbedding(model_name=model_name)
+        self.name = model_name
+        # fastembed exposes no dimension attribute; read it off one vector.
+        self.dimension = len(next(iter(self._model.embed(["dimension probe"]))))
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        return [vector.tolist() for vector in self._model.embed(texts)]
+
+
 class HashingEmbedder(Embedder):
     """Deterministic offline embedder: L2-normalised hashed unigrams + bigrams."""
 
@@ -102,18 +124,42 @@ def get_embedder() -> Embedder:
             _embedder = HashingEmbedder()
             return _embedder
 
-        try:
-            _embedder = SentenceTransformerEmbedder(settings.embedding_model, settings.embedding_device)
-            logger.info("Loaded sentence-transformers model %s (dim=%d)", _embedder.name, _embedder.dimension)
-        except Exception as exc:  # pragma: no cover - depends on the host
-            logger.warning(
-                "Could not load '%s' (%s). Falling back to the hashing embedder; "
-                "semantic search quality will be reduced.",
-                settings.embedding_model,
-                exc,
-            )
-            _embedder = HashingEmbedder()
+        # Preference order: the fast ONNX path, then PyTorch, then the offline
+        # fallback. Each step down is logged so a degraded setup is never silent.
+        for loader in _backend_loaders():
+            try:
+                _embedder = loader()
+                logger.info(
+                    "Loaded embedding backend %s (dim=%d)", _embedder.name, _embedder.dimension
+                )
+                return _embedder
+            except ImportError:
+                continue  # backend not installed — try the next one
+            except Exception as exc:  # pragma: no cover - depends on the host
+                logger.warning("Embedding backend failed to load: %s", exc)
+
+        logger.warning(
+            "Could not load '%s'. Falling back to the hashing embedder; "
+            "semantic search quality will be reduced.",
+            settings.embedding_model,
+        )
+        _embedder = HashingEmbedder()
         return _embedder
+
+
+def _backend_loaders() -> list:
+    """Candidate embedder constructors, best first, filtered by configuration."""
+    preference = (settings.embedding_backend or "auto").lower()
+    fast = lambda: FastEmbedEmbedder(settings.embedding_model)  # noqa: E731
+    torch = lambda: SentenceTransformerEmbedder(  # noqa: E731
+        settings.embedding_model, settings.embedding_device
+    )
+
+    if preference == "fastembed":
+        return [fast]
+    if preference == "sentence-transformers":
+        return [torch]
+    return [fast, torch]
 
 
 def reset_embedder() -> None:

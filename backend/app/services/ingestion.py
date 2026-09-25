@@ -35,6 +35,33 @@ def safe_filename(name: str) -> str:
     return cleaned[:120]
 
 
+def _no_text_message(document) -> str:
+    """Explain *why* nothing could be read, so the user knows what to do."""
+    from app.services.ocr import engine_status
+
+    status = engine_status()
+    if not status.get("enabled"):
+        return (
+            "No text could be read from this PDF. It looks scanned, and OCR is "
+            "disabled — set OCR_ENABLED=true to recover text from page images."
+        )
+    if not status.get("engine"):
+        return (
+            "No text could be read from this PDF. It looks scanned, but no OCR "
+            f"engine is available: {status.get('reason')}"
+        )
+    if document.ocr_skipped_pages:
+        return (
+            f"OCR ran with {status['engine']} but recognised no text on "
+            f"{len(document.ocr_skipped_pages)} page(s). The scan may be too "
+            "low-resolution; try raising OCR_DPI."
+        )
+    return (
+        "No text could be read from this PDF. It may be image-only with no "
+        "recognisable text, or corrupt."
+    )
+
+
 def validate_pdf(data: bytes, filename: str) -> None:
     if not data:
         raise IngestionError("Uploaded file is empty.")
@@ -91,11 +118,11 @@ def process_paper(session: Session, paper_id: str) -> Paper:
         session.add(paper)
         session.commit()
 
-        document = extract_pdf(paper.file_path)
+        # The content hash keys the OCR cache, so re-ingesting a scanned paper
+        # skips recognition entirely.
+        document = extract_pdf(paper.file_path, doc_id=paper.content_hash)
         if not document.text.strip():
-            raise IngestionError(
-                "No text layer found in this PDF. Scanned documents need OCR before ingestion."
-            )
+            raise IngestionError(_no_text_message(document))
 
         paper.title = document.title or paper.filename
         paper.authors = document.authors
@@ -108,6 +135,10 @@ def process_paper(session: Session, paper_id: str) -> Paper:
         paper.char_count = document.char_count
         paper.full_text = document.text
         paper.sections = document.sections
+        paper.text_source = document.text_source
+        paper.ocr_pages = document.ocr_pages
+        paper.ocr_confidence = document.ocr_confidence
+        paper.ocr_engine = document.ocr_engine
 
         paper.status = PaperStatus.CHUNKING
         session.add(paper)
@@ -130,6 +161,7 @@ def process_paper(session: Session, paper_id: str) -> Paper:
                 page_end=chunk.page_end,
                 section=chunk.section,
                 token_estimate=chunk.token_estimate,
+                source=chunk.source,
             )
             for chunk in chunks
         ]
@@ -145,6 +177,17 @@ def process_paper(session: Session, paper_id: str) -> Paper:
         store = get_vector_store()
         store.delete_paper(paper.id)
         store.add_chunks(paper.id, chunks, [row.id for row in rows], paper_title=paper.title)
+
+        # Figures are extracted here because it is free — only the later vision
+        # analysis costs quota. A failure must not fail the ingest.
+        try:
+            from app.services.figure_store import extract_and_store
+
+            figures = extract_and_store(session, paper)
+            paper.figure_count = len(figures)
+        except Exception:
+            logger.warning("Figure extraction failed for paper %s", paper.id, exc_info=True)
+            paper.figure_count = 0
 
         paper.chunk_count = len(chunks)
         paper.status = PaperStatus.INDEXED
@@ -180,6 +223,13 @@ def delete_paper(session: Session, paper_id: str) -> bool:
     session.exec(delete(ExtractionRecord).where(ExtractionRecord.paper_id == paper_id))
     session.exec(delete(SummaryRecord).where(SummaryRecord.paper_id == paper_id))
     session.commit()
+
+    try:
+        from app.services.figure_store import clear_figures
+
+        clear_figures(session, paper_id, remove_files=True)
+    except Exception:  # pragma: no cover
+        logger.warning("Could not delete figures for paper %s", paper_id, exc_info=True)
 
     try:
         get_vector_store().delete_paper(paper_id)
