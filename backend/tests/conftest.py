@@ -273,6 +273,36 @@ AGENT_RESPONSES = {
         "underexplored_intersections": ["Sparse attention combined with retrieval grounding"],
         "open_questions": ["Does sparsity harm faithfulness?"],
     },
+    # The Verification Agent makes two calls with two different system prompts;
+    # these keys are the phrase that distinguishes them.
+    "break a piece of generated text": {
+        "claims": [
+            {"text": "SparseSum reaches 44.1 ROUGE-L on arXiv.", "type": "numeric", "checkable": True},
+            {
+                "text": "SparseSum was evaluated on Portuguese legal documents.",
+                "type": "factual",
+                "checkable": True,
+            },
+        ]
+    },
+    "decide whether each claim is supported": {
+        "judgements": [
+            {
+                "claim_index": 0,
+                "verdict": "supported",
+                "confidence": "high",
+                "evidence_quote": "SparseSum reaches 44.1 ROUGE-L on arXiv",
+                "explanation": "The results section states exactly this.",
+            },
+            {
+                "claim_index": 1,
+                "verdict": "unsupported",
+                "confidence": "high",
+                "evidence_quote": "",
+                "explanation": "No passage mentions legal documents in any language.",
+            },
+        ]
+    },
     "Knowledge Graph Agent": {
         "entities": [
             {"name": "SparseSum", "type": "Method", "description": "Sparse attention summarizer"},
