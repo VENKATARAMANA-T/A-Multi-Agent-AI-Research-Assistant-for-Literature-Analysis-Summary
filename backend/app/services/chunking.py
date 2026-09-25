@@ -22,6 +22,9 @@ class TextChunk:
     page_start: int | None = None
     page_end: int | None = None
     section: str | None = None
+    # "native" or "ocr", inherited from the page the chunk starts on, so a
+    # search result can flag text that may contain recognition errors.
+    source: str = "native"
 
     @property
     def token_estimate(self) -> int:
@@ -39,6 +42,10 @@ def _page_offsets(document: ExtractedDocument) -> tuple[list[int], list[int]]:
         numbers.append(page.number)
         cursor += len(page.text) + 1  # +1 for the "\n" used when joining
     return offsets, numbers
+
+
+def _page_sources(document: ExtractedDocument) -> dict[int, str]:
+    return {page.number: page.source for page in document.pages}
 
 
 def _page_for_offset(offsets: list[int], numbers: list[int], offset: int) -> int | None:
@@ -103,6 +110,7 @@ def chunk_document(
     pieces = [p.strip() for p in splitter.split_text(text) if p.strip()]
 
     offsets, numbers = _page_offsets(document)
+    sources = _page_sources(document)
     chunks: list[TextChunk] = []
     cursor = 0
 
@@ -116,13 +124,15 @@ def chunk_document(
         start, end = found, found + len(piece)
         cursor = max(cursor, start + 1)
 
+        page_start = _page_for_offset(offsets, numbers, start)
         chunks.append(
             TextChunk(
                 index=index,
                 text=piece,
-                page_start=_page_for_offset(offsets, numbers, start),
+                page_start=page_start,
                 page_end=_page_for_offset(offsets, numbers, end),
                 section=_section_for_chunk(text, start, piece),
+                source=sources.get(page_start or -1, "native"),
             )
         )
 

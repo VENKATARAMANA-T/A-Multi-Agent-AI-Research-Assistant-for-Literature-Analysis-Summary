@@ -13,10 +13,14 @@ from __future__ import annotations
 
 import logging
 import re
+import statistics
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import fitz  # PyMuPDF
+
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,8 @@ AFFILIATION_HINTS = (
 class PageText:
     number: int  # 1-based
     text: str
+    source: str = "native"  # "native" | "ocr"
+    ocr_confidence: float | None = None
 
 
 @dataclass
@@ -73,6 +79,12 @@ class ExtractedDocument:
     keywords: list[str] = field(default_factory=list)
     sections: dict[str, str] = field(default_factory=dict)
 
+    # --- OCR provenance ------------------------------------------------------
+    ocr_pages: list[int] = field(default_factory=list)
+    ocr_confidence: float | None = None
+    ocr_engine: str | None = None
+    ocr_skipped_pages: list[int] = field(default_factory=list)
+
     @property
     def page_count(self) -> int:
         return len(self.pages)
@@ -81,12 +93,39 @@ class ExtractedDocument:
     def char_count(self) -> int:
         return len(self.text)
 
+    @property
+    def text_source(self) -> str:
+        """Where this document's text came from: native, ocr, or a mix."""
+        if not self.ocr_pages:
+            return "native"
+        return "ocr" if len(self.ocr_pages) == self.page_count else "mixed"
+
 
 def _clean(value: str | None) -> str | None:
     if not value:
         return None
     collapsed = re.sub(r"\s+", " ", value).strip(" \t\n\r-—·|")
     return collapsed or None
+
+
+def _title_from_ocr(text: str) -> str | None:
+    """Pick a title from recognised text, where no font sizes are available.
+
+    The first substantial line that is not an identifier or a boilerplate header
+    is the best available guess.
+    """
+    noise = ("arxiv:", "doi:", "http", "issn", "isbn", "vol.", "proceedings of", "preprint")
+    for raw in text.splitlines()[:12]:
+        line = _clean(raw)
+        if not line or len(line) < 12 or len(line) > 220:
+            continue
+        lowered = line.lower()
+        if any(lowered.startswith(prefix) for prefix in noise):
+            continue
+        if EMAIL_RE.search(line) or sum(ch.isdigit() for ch in line) > len(line) * 0.3:
+            continue
+        return line
+    return None
 
 
 def _largest_font_title(page: "fitz.Page") -> str | None:
@@ -205,16 +244,134 @@ def split_sections(text: str) -> dict[str, str]:
     return sections
 
 
-def extract_pdf(path: str | Path) -> ExtractedDocument:
-    """Extract text, page map and metadata from a PDF file."""
+def image_coverage(page: "fitz.Page") -> float:
+    """Fraction of the page covered by raster images.
+
+    Used to tell a scanned page (little text, one big image) apart from a
+    genuinely blank one (little text, nothing else) — OCRing the latter is
+    wasted work.
+    """
+    try:
+        page_area = abs(page.rect.width * page.rect.height)
+        if page_area <= 0:
+            return 0.0
+        covered = 0.0
+        for block in page.get_text("dict").get("blocks", []):
+            if block.get("type") != 1:  # 1 == image block
+                continue
+            x0, y0, x1, y1 = block.get("bbox", (0, 0, 0, 0))
+            covered += abs((x1 - x0) * (y1 - y0))
+        return min(1.0, covered / page_area)
+    except Exception:  # pragma: no cover - malformed PDFs
+        return 0.0
+
+
+def page_needs_ocr(page: "fitz.Page", native_text: str) -> bool:
+    """Decide whether one page should be recognised from its image."""
+    if len(native_text.strip()) >= settings.ocr_min_chars_per_page:
+        return False
+    return image_coverage(page) >= settings.ocr_min_image_coverage
+
+
+def _apply_ocr(doc: "fitz.Document", pages: list[PageText], doc_id: str | None) -> dict[str, Any]:
+    """Recognise the pages that need it, in place. Returns provenance info."""
+    from app.services.ocr import OCRUnavailable, get_engine, recognise_page
+
+    candidates = [
+        page_text.number
+        for page_text, page in zip(pages, doc)
+        if page_needs_ocr(page, page_text.text)
+    ]
+    if not candidates:
+        return {}
+
+    try:
+        engine = get_engine()
+    except OCRUnavailable as exc:
+        logger.warning(
+            "%d page(s) look scanned but OCR is unavailable: %s", len(candidates), exc
+        )
+        return {"skipped": candidates, "reason": str(exc)}
+
+    limit = settings.ocr_max_pages_per_document
+    selected, skipped = candidates[:limit], candidates[limit:]
+    if skipped:
+        logger.warning(
+            "OCR limited to %d pages; skipping %d more (raise OCR_MAX_PAGES_PER_DOCUMENT)",
+            limit,
+            len(skipped),
+        )
+
+    confidences: list[float] = []
+    recognised: list[int] = []
+
+    for number in selected:
+        page = doc[number - 1]
+        try:
+            pixmap = page.get_pixmap(dpi=settings.ocr_dpi)
+            result = recognise_page(
+                pixmap.tobytes("png"),
+                page_width=page.rect.width,
+                page_height=page.rect.height,
+                doc_id=doc_id,
+                page_number=number,
+            )
+        except Exception as exc:
+            logger.warning("OCR failed on page %d: %s", number, exc)
+            skipped.append(number)
+            continue
+
+        if result.is_empty:
+            skipped.append(number)
+            continue
+
+        target = pages[number - 1]
+        target.text = result.text
+        target.source = "ocr"
+        target.ocr_confidence = result.confidence
+        confidences.append(result.confidence)
+        recognised.append(number)
+
+    if not recognised:
+        return {"skipped": skipped, "engine": engine.name}
+
+    logger.info(
+        "OCR recovered %d page(s) with %s (mean confidence %.2f)",
+        len(recognised),
+        engine.name,
+        statistics.fmean(confidences),
+    )
+    return {
+        "pages": recognised,
+        "confidence": round(statistics.fmean(confidences), 4),
+        "engine": engine.name,
+        "skipped": skipped,
+    }
+
+
+def extract_pdf(path: str | Path, doc_id: str | None = None) -> ExtractedDocument:
+    """Extract text, page map and metadata from a PDF file.
+
+    `doc_id` should be the file's content hash when available: it keys the OCR
+    cache, so re-ingesting a scanned paper skips recognition entirely.
+    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"PDF not found: {path}")
 
     with fitz.open(path) as doc:
         pages = [PageText(number=i + 1, text=page.get_text("text") or "") for i, page in enumerate(doc)]
+
+        ocr_info: dict[str, Any] = {}
+        if settings.ocr_enabled and pages:
+            ocr_info = _apply_ocr(doc, pages, doc_id)
+
         pdf_meta = dict(doc.metadata or {})
         first_page_title = _largest_font_title(doc[0]) if doc.page_count else None
+        # A scanned first page has no font metadata, so the layout heuristic
+        # cannot find a title there; fall back to the recognised text instead.
+        if pages and pages[0].source == "ocr":
+            first_page_title = _title_from_ocr(pages[0].text)
 
     full_text = "\n".join(p.text for p in pages)
     first_page_text = pages[0].text if pages else ""
@@ -281,4 +438,8 @@ def extract_pdf(path: str | Path) -> ExtractedDocument:
         venue=venue,
         keywords=_extract_keywords(first_page_text),
         sections=split_sections(full_text),
+        ocr_pages=ocr_info.get("pages") or [],
+        ocr_confidence=ocr_info.get("confidence"),
+        ocr_engine=ocr_info.get("engine"),
+        ocr_skipped_pages=sorted(ocr_info.get("skipped") or []),
     )
