@@ -65,12 +65,57 @@ export const api = {
   deletePaper: (id) => request(`/api/papers/${id}`, { method: 'DELETE' }),
   reindexPaper: (id) => request(`/api/papers/${id}/reindex`, { method: 'POST' }),
   paperFileUrl: (id) => `${BASE_URL}/api/papers/${id}/file`,
+  // Returns a job to follow, not the finished result — see streamJob below.
   uploadPapers: (files, signal) => {
     const form = new FormData();
     Array.from(files).forEach((file) => form.append('files', file));
     return request('/api/papers/upload', { method: 'POST', body: form, signal });
   },
+  uploadPapersAndWait: (files, signal) => {
+    const form = new FormData();
+    Array.from(files).forEach((file) => form.append('files', file));
+    return request('/api/papers/upload?wait=true', { method: 'POST', body: form, signal });
+  },
   search: (payload) => request('/api/papers/search', { method: 'POST', body: payload }),
+
+  // --- reader ---------------------------------------------------------------
+  highlight: (params) => request(`/api/reader/highlight${toQuery(params)}`),
+  explain: (payload) => request('/api/reader/explain', { method: 'POST', body: payload }),
+  citation: (id, style) => request(`/api/reader/citation/${id}${toQuery({ style })}`),
+  bibliographyUrl: (params) => `${BASE_URL}/api/reader/citations${toQuery({ ...params, download: true })}`,
+
+  // --- comparison matrix ----------------------------------------------------
+  runMatrix: (payload) => request('/api/matrix', { method: 'POST', body: payload }),
+  listMatrixRuns: () => request('/api/matrix'),
+  getMatrixRun: (id) => request(`/api/matrix/${id}`),
+  deleteMatrixRun: (id) => request(`/api/matrix/${id}`, { method: 'DELETE' }),
+  matrixCsvUrl: (id) => `${BASE_URL}/api/matrix/${id}/csv`,
+
+  // --- discovery ------------------------------------------------------------
+  discoverRelated: (params) => request(`/api/discover/related${toQuery(params)}`),
+  discoverSearch: (params) => request(`/api/discover/search${toQuery(params)}`),
+  discoverGaps: (params) => request(`/api/discover/gaps${toQuery(params)}`),
+
+  // --- conversations --------------------------------------------------------
+  listConversations: () => request('/api/agents/conversations'),
+  getConversation: (id) => request(`/api/agents/conversations/${id}`),
+  deleteConversation: (id) => request(`/api/agents/conversations/${id}`, { method: 'DELETE' }),
+
+  // --- figures --------------------------------------------------------------
+  listFigures: (params) => request(`/api/figures${toQuery(params)}`),
+  getFigure: (id) => request(`/api/figures/${id}`),
+  figureImageUrl: (id) => `${BASE_URL}/api/figures/${id}/image`,
+  figureEstimate: (params) => request(`/api/figures/estimate${toQuery(params)}`),
+  analyseFigures: (payload) => request('/api/figures/analyse', { method: 'POST', body: payload }),
+
+  // --- jobs -----------------------------------------------------------------
+  listJobs: (params) => request(`/api/jobs${toQuery(params)}`),
+  getJob: (id) => request(`/api/jobs/${id}`),
+  streamJob: (id) => new EventSource(`${BASE_URL}/api/jobs/${id}/stream`),
+
+  // --- cache ----------------------------------------------------------------
+  cacheStats: () => request('/api/cache'),
+  clearCache: () => request('/api/cache', { method: 'DELETE' }),
 
   // --- agents ---------------------------------------------------------------
   ask: (payload) => request('/api/agents/ask', { method: 'POST', body: payload }),

@@ -8,6 +8,9 @@ const NAV = [
   { to: '/ask', label: 'Ask (RAG)', icon: '?' },
   { to: '/summaries', label: 'Summaries', icon: '≡' },
   { to: '/extraction', label: 'Extraction', icon: '⌗' },
+  { to: '/figures', label: 'Figures', icon: '▩' },
+  { to: '/matrix', label: 'Comparison', icon: '⊞' },
+  { to: '/discover', label: 'Discover', icon: '✦' },
   { to: '/gaps', label: 'Research Gaps', icon: '◇' },
   { to: '/graph', label: 'Knowledge Graph', icon: '⁂' },
   { to: '/reports', label: 'Reports', icon: '▦' },
@@ -51,6 +54,9 @@ export default function Layout() {
             </div>
             <div className="status-sub">
               {indexedPapers.length} indexed · graph: {health?.graph?.backend || 'n/a'}
+            </div>
+            <div className="status-sub">
+              OCR: {health?.ocr?.engine || (health?.ocr?.enabled ? 'unavailable' : 'off')}
             </div>
             {health?.embeddings?.degraded && (
               <div className="status-sub status-warn">embeddings: fallback mode</div>

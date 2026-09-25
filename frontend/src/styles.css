@@ -761,6 +761,274 @@ code,
   margin: 0;
 }
 
+/* --- reader ---------------------------------------------------------------- */
+
+.reader-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 1200px) {
+  .reader-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.reader-main,
+.reader-side {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.reader-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.7rem;
+  position: sticky;
+  top: 0.5rem;
+  z-index: 5;
+}
+
+.reader-spacer {
+  flex: 1;
+}
+
+.reader-canvas {
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  overflow: auto;
+  max-height: 78vh;
+  display: flex;
+  justify-content: center;
+}
+
+.reader-page {
+  position: relative;
+  display: inline-block;
+  box-shadow: var(--shadow);
+}
+
+.reader-highlight {
+  position: absolute;
+  background: rgba(250, 204, 21, 0.38);
+  border-bottom: 2px solid #ca8a04;
+  border-radius: 2px;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+}
+
+.reader-selection {
+  border-left: 3px solid var(--primary);
+  margin: 0 0 0.7rem;
+  padding: 0.4rem 0 0.4rem 0.7rem;
+  font-size: 0.82rem;
+  color: #475569;
+}
+
+/* --- comparison matrix ------------------------------------------------------ */
+
+.matrix-column-row {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr 120px 34px;
+  gap: 0.4rem;
+  margin-bottom: 0.45rem;
+  align-items: center;
+}
+
+@media (max-width: 800px) {
+  .matrix-column-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.input-select {
+  cursor: pointer;
+}
+
+.matrix-cell {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-bottom: 1px dotted var(--border);
+}
+
+.matrix-cell.is-missing {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.matrix-evidence {
+  margin-top: 0.3rem;
+  font-size: 0.74rem;
+  color: #475569;
+  background: var(--surface-alt);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.5rem;
+}
+
+.chip-button {
+  border: 1px solid transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+}
+
+.chip-button:hover {
+  border-color: var(--primary);
+}
+
+/* --- discovery -------------------------------------------------------------- */
+
+.candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.candidate {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.8rem;
+}
+
+.candidate-head {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin-bottom: 0.3rem;
+}
+
+.candidate-abstract {
+  font-size: 0.82rem;
+  color: #475569;
+}
+
+/* --- figures --------------------------------------------------------------- */
+
+.figure-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 1rem;
+}
+
+.figure-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.figure-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 320px;
+  object-fit: contain;
+  object-position: top left;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.7rem;
+}
+
+.source-figure {
+  display: block;
+  max-width: 320px;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin: 0.4rem 0;
+  background: #fff;
+}
+
+.figure-caption {
+  font-size: 0.82rem;
+  color: #475569;
+}
+
+.figure-detail {
+  border-top: 1px solid var(--border);
+  margin-top: 0.8rem;
+  padding-top: 0.6rem;
+}
+
+.figure-table {
+  background: var(--surface-alt);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem;
+  font-size: 0.72rem;
+  overflow-x: auto;
+  white-space: pre;
+  margin: 0;
+}
+
+/* --- OCR provenance -------------------------------------------------------- */
+
+.ocr-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* --- progress -------------------------------------------------------------- */
+
+.progress {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  overflow: hidden;
+  margin-bottom: 0.35rem;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #60a5fa, var(--primary));
+  transition: width 0.3s ease;
+}
+
+.progress-fill.is-failed {
+  background: linear-gradient(90deg, #fca5a5, var(--danger));
+}
+
+.progress-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 0 0 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill {
+    transition: none;
+  }
+}
+
 /* --- paper list ----------------------------------------------------------- */
 
 .paper-list {

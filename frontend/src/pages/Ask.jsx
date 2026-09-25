@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../api/client';
 import AgentTrace from '../components/AgentTrace';
 import PaperPicker from '../components/PaperPicker';
@@ -123,13 +124,37 @@ export default function Ask() {
                             <div className="source-head">
                               <Badge tone="info">{source.marker}</Badge>
                               <strong>{source.paper_title}</strong>
+                              {source.kind === 'figure' && (
+                                <Badge tone="success">{source.label || 'Figure'}</Badge>
+                              )}
                               <span className="muted">
                                 {source.page ? `p.${source.page}` : ''}
                                 {source.section ? ` · ${source.section}` : ''} · score{' '}
                                 {source.score}
                               </span>
                             </div>
+                            {source.kind === 'figure' && source.figure_id && (
+                              <img
+                                className="source-figure"
+                                src={api.figureImageUrl(source.figure_id)}
+                                alt={source.label || 'Cited figure'}
+                                loading="lazy"
+                              />
+                            )}
                             <p className="source-excerpt">{source.excerpt}…</p>
+                            {source.paper_id && (
+                              <Link
+                                className="btn btn-ghost btn-sm"
+                                to={
+                                  `/reader/${source.paper_id}?` +
+                                  (source.kind === 'figure' && source.figure_id
+                                    ? `figure=${source.figure_id}`
+                                    : `chunk=${source.chunk_id}`)
+                                }
+                              >
+                                Open in paper →
+                              </Link>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -168,6 +193,11 @@ export default function Ask() {
                           <span className="muted">
                             [S{i + 1}] {chunk.paper_title} · p.{chunk.page_start ?? '?'} · score{' '}
                             {chunk.score}
+                            {chunk.source === 'ocr' && (
+                              <span className="ocr-flag" title="Recovered by OCR — may contain recognition errors">
+                                ⌾ OCR
+                              </span>
+                            )}
                           </span>
                           <p>{chunk.text.slice(0, 300)}…</p>
                         </li>

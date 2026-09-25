@@ -8,6 +8,7 @@ import { useCorpus } from '../context/CorpusContext';
 
 const NODE_COLORS = {
   Paper: '#2563eb',
+  Figure: '#c2410c',
   Method: '#7c3aed',
   Dataset: '#0891b2',
   Metric: '#ca8a04',

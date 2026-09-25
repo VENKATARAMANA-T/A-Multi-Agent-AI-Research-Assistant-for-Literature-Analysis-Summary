@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../api/client';
 import { Badge, Card, EmptyState, ErrorBanner, Spinner, statusTone } from '../components/common';
 import { useCorpus } from '../context/CorpusContext';
@@ -73,12 +74,21 @@ export default function Library() {
           <h1>Library</h1>
           <p className="page-sub">{papers.length} papers · click a row to select it for analysis</p>
         </div>
-        <input
-          className="input input-search"
-          placeholder="Filter by title, author or keyword…"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
+        <div className="row-actions">
+          <input
+            className="input input-search"
+            placeholder="Filter by title, author or keyword…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <a
+            className="btn btn-ghost btn-sm"
+            href={api.bibliographyUrl({ style: 'bibtex' })}
+            title="Export every paper as a .bib file"
+          >
+            Export BibTeX
+          </a>
+        </div>
       </header>
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
@@ -120,6 +130,9 @@ export default function Library() {
               actions={
                 <div className="row-actions">
                   <Badge tone={statusTone(paper.status)}>{paper.status}</Badge>
+                  <Link className="btn btn-ghost btn-sm" to={`/reader/${paper.id}`}>
+                    Read
+                  </Link>
                   <a
                     className="btn btn-ghost btn-sm"
                     href={api.paperFileUrl(paper.id)}
@@ -159,6 +172,21 @@ export default function Library() {
                 <span>{paper.chunk_count} chunks</span>
                 <span>{(paper.char_count / 1000).toFixed(1)}k characters</span>
                 <span>{(paper.size_bytes / 1048576).toFixed(2)} MB</span>
+                {paper.text_source !== 'native' && (
+                  <span
+                    className="ocr-flag"
+                    title={
+                      `Text on ${paper.ocr_pages?.length ?? 0} page(s) was recovered by OCR` +
+                      `${paper.ocr_engine ? ` using ${paper.ocr_engine}` : ''}. ` +
+                      'Recognised text can contain errors.'
+                    }
+                  >
+                    ⌾ {paper.text_source === 'ocr' ? 'OCR' : 'Partly OCR'}
+                    {paper.ocr_confidence
+                      ? ` · ${Math.round(paper.ocr_confidence * 100)}% confidence`
+                      : ''}
+                  </span>
+                )}
                 {paper.doi && (
                   <a href={`https://doi.org/${paper.doi}`} target="_blank" rel="noreferrer">
                     doi:{paper.doi}

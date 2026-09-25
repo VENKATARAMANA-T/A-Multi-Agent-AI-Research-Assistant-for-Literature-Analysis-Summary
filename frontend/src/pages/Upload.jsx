@@ -1,17 +1,69 @@
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import { Badge, Card, ErrorBanner, Spinner, statusTone } from '../components/common';
 import { useCorpus } from '../context/CorpusContext';
 
+const STAGE_LABELS = {
+  storing: 'Storing file',
+  extracting: 'Extracting text',
+  chunking: 'Chunking',
+  embedding: 'Embedding',
+  indexing: 'Indexing',
+};
+
+const TERMINAL = ['completed', 'partial', 'failed'];
+
 export default function Upload() {
   const { refresh } = useCorpus();
   const navigate = useNavigate();
   const inputRef = useRef(null);
+  const streamRef = useRef(null);
+
   const [dragging, setDragging] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const [result, setResult] = useState(null);
+  const [job, setJob] = useState(null);
+
+  const busy = Boolean(job && !TERMINAL.includes(job.status));
+
+  // Close any open stream when the component unmounts.
+  useEffect(() => () => streamRef.current?.close(), []);
+
+  const follow = useCallback(
+    (jobId) => {
+      streamRef.current?.close();
+      const source = api.streamJob(jobId);
+      streamRef.current = source;
+
+      const onUpdate = (event) => {
+        try {
+          setJob(JSON.parse(event.data));
+        } catch {
+          /* ignore malformed frames */
+        }
+      };
+
+      source.addEventListener('progress', onUpdate);
+      source.addEventListener('done', (event) => {
+        onUpdate(event);
+        source.close();
+        refresh();
+      });
+      // The browser retries automatically on a dropped connection; fall back to
+      // a single poll so a closed stream never leaves the UI stuck mid-progress.
+      source.onerror = () => {
+        source.close();
+        api
+          .getJob(jobId)
+          .then((payload) => {
+            setJob(payload);
+            if (TERMINAL.includes(payload.status)) refresh();
+          })
+          .catch(() => setError('Lost contact with the indexing job.'));
+      };
+    },
+    [refresh],
+  );
 
   const handleFiles = async (fileList) => {
     const files = Array.from(fileList || []).filter((file) =>
@@ -22,20 +74,21 @@ export default function Upload() {
       return;
     }
 
-    setBusy(true);
     setError(null);
-    setResult(null);
+    setJob(null);
     try {
-      const payload = await api.uploadPapers(files);
-      setResult(payload);
-      await refresh();
+      const started = await api.uploadPapers(files);
+      setJob(started);
+      follow(started.id);
     } catch (err) {
       setError(err.message);
     } finally {
-      setBusy(false);
       if (inputRef.current) inputRef.current.value = '';
     }
   };
+
+  const percent = Math.round((job?.progress ?? 0) * 100);
+  const indexed = job?.items?.filter((item) => item.state === 'indexed').length ?? 0;
 
   return (
     <div className="page">
@@ -43,7 +96,7 @@ export default function Upload() {
         <div>
           <h1>Upload papers</h1>
           <p className="page-sub">
-            PDFs are extracted, chunked, embedded and indexed before the response returns.
+            Indexing runs in the background — you can navigate away and come back.
           </p>
         </div>
       </header>
@@ -78,7 +131,7 @@ export default function Upload() {
           onChange={(event) => handleFiles(event.target.files)}
         />
         {busy ? (
-          <Spinner label="Extracting, chunking, embedding and indexing…" />
+          <Spinner label={`Indexing ${job.completed + job.failed} of ${job.total}…`} />
         ) : (
           <>
             <div className="dropzone-icon" aria-hidden="true">
@@ -92,36 +145,63 @@ export default function Upload() {
         )}
       </div>
 
-      {result && (
+      {job && (
         <Card
-          title="Upload results"
-          subtitle={`${result.indexed} indexed · ${result.duplicates} duplicates · ${result.failed} failed`}
+          title={busy ? 'Indexing in progress' : 'Upload complete'}
+          subtitle={
+            busy
+              ? `${job.completed + job.failed} of ${job.total} processed`
+              : `${indexed} indexed · ${job.failed} failed`
+          }
           actions={
-            result.indexed > 0 && (
-              <button type="button" className="btn btn-primary btn-sm" onClick={() => navigate('/library')}>
+            !busy &&
+            indexed > 0 && (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => navigate('/library')}
+              >
                 Go to library
               </button>
             )
           }
         >
+          <div
+            className="progress"
+            role="progressbar"
+            aria-valuenow={percent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div
+              className={`progress-fill ${job.status === 'failed' ? 'is-failed' : ''}`}
+              style={{ width: `${percent}%` }}
+            />
+          </div>
+          <p className="progress-label">{percent}%</p>
+
           <table className="table">
             <thead>
               <tr>
                 <th>File</th>
                 <th>Status</th>
                 <th>Detail</th>
-                <th>Title detected</th>
               </tr>
             </thead>
             <tbody>
-              {result.results.map((item, index) => (
+              {(job.items || []).map((item, index) => (
                 <tr key={index}>
-                  <td className="mono">{item.filename}</td>
+                  <td className="mono">{item.name}</td>
                   <td>
-                    <Badge tone={statusTone(item.status)}>{item.status}</Badge>
+                    {item.state === 'running' ? (
+                      <Badge tone="info">{STAGE_LABELS[item.stage] || 'Working'}</Badge>
+                    ) : item.state === 'queued' ? (
+                      <Badge tone="neutral">Queued</Badge>
+                    ) : (
+                      <Badge tone={statusTone(item.state)}>{item.state}</Badge>
+                    )}
                   </td>
-                  <td>{item.detail}</td>
-                  <td>{item.paper?.title || '—'}</td>
+                  <td>{item.detail || '—'}</td>
                 </tr>
               ))}
             </tbody>
