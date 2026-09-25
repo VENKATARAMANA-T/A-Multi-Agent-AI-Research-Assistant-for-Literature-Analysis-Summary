@@ -2,9 +2,10 @@
 
 A multi-agent AI research assistant for literature analysis. Upload research papers and
 ResearchCompass extracts their text, chunks and embeds it, indexes it in a vector store, and
-turns six specialised agents loose on it — answering questions with citations, summarising
-across papers, extracting datasets/methods/metrics, building a knowledge graph, identifying
-research gaps, and exporting a literature review as Markdown or PDF.
+turns a team of specialised agents loose on it — answering questions with citations,
+summarising across papers, extracting datasets/methods/metrics, building a knowledge graph,
+identifying research gaps, reading figures, proposing hypotheses the corpus only implies,
+fact-checking its own output, and exporting a literature review as Markdown or PDF.
 
 ```
                     ┌──────────────────────── React + Vite ────────────────────────┐
@@ -314,6 +315,25 @@ claim, and proposes a test — and is expected to reject most of them.
 > papers the mechanism works and is tested, but the yield is small; strict mode may return
 > nothing at all, and the diagnostics say exactly why.
 
+### Step 7d — Verification
+Every agent above produces claims. This one checks them.
+
+The text is split into atomic claims, each claim is used as a **fresh retrieval query**, and
+the claims are judged together against the passages that came back — `supported`,
+`partially_supported`, `unsupported`, `contradicted` or `unverifiable`, each with the quote
+that decided it.
+
+**Re-retrieval is the entire point.** Handed the context that produced the text, a model
+agrees with itself: the output looks like an audit and carries none of the value. Searching
+the corpus again, per claim, is what turns it into a check — a claim the original context
+supported but the corpus does not is exactly the failure this catches.
+
+Cost is **two model calls** regardless of length — one to split, one to judge them all — so it
+stays affordable on a free-tier key. It is opt-in, with the cost shown on the button.
+
+> A claim that is true in general but absent from these papers is reported as unsupported.
+> That is deliberate: the question is whether *this corpus* backs the sentence.
+
 ### Step 8 — Reports
 A literature review with a corpus table, synthesis, per-paper comparison table, corpus-wide
 dataset/method/metric tables, research gaps, a knowledge-graph summary and references —
@@ -360,6 +380,8 @@ Interactive docs at `/docs`. Highlights:
 | `POST` | `/api/agents/graph/build` | Knowledge Graph agent |
 | `POST` | `/api/agents/review` | Full pipeline in one run |
 | `GET` | `/api/agents/runs` | Audit trail |
+| `POST` | `/api/verify` | Fact-check generated text against the corpus |
+| `GET` | `/api/verify` | Past verifications |
 | `GET` | `/api/graph` | Graph for visualisation (filter by paper, type, degree) |
 | `POST` | `/api/reports` | Generate a literature review |
 | `GET` | `/api/reports/{id}/pdf` | Download PDF |
@@ -424,7 +446,7 @@ cd backend
 .venv\Scripts\python -m pytest
 ```
 
-363 tests, no network access required — the suite runs against an isolated temp directory with
+390 tests, no network access required — the suite runs against an isolated temp directory with
 the offline embedder, Neo4j disabled, and a mocked Gemini client.
 
 Coverage:
@@ -449,6 +471,9 @@ Coverage:
   and that no branch's trace is lost when four of them write state at once
 - **`test_jobs.py`** — background ingestion, per-file progress, partial failure, SSE streaming
 - **`test_llm_timeout.py`** — the request deadline and the bounded retry window
+- **`test_verification.py`** — that each claim drives its own retrieval and the judge never
+  sees the original text, that an unsupported claim is flagged, that a skipped or unknown
+  verdict fails closed, and that the cost stays at two calls however many claims there are
 - **`test_ocr.py`** — real recognition against image-only PDFs, the per-page decision,
   two-column reading order, caching, and graceful degradation when no engine is available
 - **`test_figures.py`** — caption vs cross-reference, prose vs tabular content, region
