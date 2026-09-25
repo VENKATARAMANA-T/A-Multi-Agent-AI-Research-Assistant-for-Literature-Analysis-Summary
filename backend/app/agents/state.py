@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import operator
 import time
-from typing import Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from app.services.vector_store import RetrievedChunk
 
@@ -39,9 +40,13 @@ class AgentState(TypedDict, total=False):
     report: dict[str, Any]
 
     # --- bookkeeping ---------------------------------------------------------
-    trace: list[dict[str, Any]]
-    errors: list[str]
-    llm_calls: int
+    # These three are written by *every* node, including branches that LangGraph
+    # runs concurrently in the `review` pipeline. Without reducers, parallel
+    # branches would each write a whole list and the last writer would silently
+    # discard the others' entries. `operator.add` merges them instead.
+    trace: Annotated[list[dict[str, Any]], operator.add]
+    errors: Annotated[list[str], operator.add]
+    llm_calls: Annotated[int, operator.add]
 
 
 def new_state(intent: Intent, **kwargs: Any) -> AgentState:
@@ -84,7 +89,16 @@ def format_chunk_context(chunks: list[RetrievedChunk], max_chars: int = MAX_CONT
     for i, chunk in enumerate(chunks, start=1):
         location = f"p.{chunk.page_start}" if chunk.page_start else "n/a"
         section = f", section: {chunk.section}" if chunk.section else ""
-        header = f"[S{i}] {chunk.paper_title or chunk.paper_id[:8]} ({location}{section})"
+        title = chunk.paper_title or chunk.paper_id[:8]
+
+        if getattr(chunk, "kind", "text") == "figure":
+            # Label figures explicitly: an answer citing a chart should say so,
+            # and the model needs to know it is reading a description of an
+            # image rather than the paper's prose.
+            header = f"[S{i}] {title} — {chunk.label or 'Figure'} ({location}) [FIGURE]"
+        else:
+            header = f"[S{i}] {title} ({location}{section})"
+
         body = chunk.text.strip()
         block = f"{header}\n{body}"
         if used + len(block) > max_chars:
