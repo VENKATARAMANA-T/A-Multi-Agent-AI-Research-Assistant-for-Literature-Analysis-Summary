@@ -7,6 +7,7 @@ import Discover from './pages/Discover';
 import Extraction from './pages/Extraction';
 import Figures from './pages/Figures';
 import Gaps from './pages/Gaps';
+import Hypotheses from './pages/Hypotheses';
 import Matrix from './pages/Matrix';
 import Reader from './pages/Reader';
 import GraphView from './pages/GraphView';
@@ -29,6 +30,7 @@ export default function App() {
           <Route path="figures" element={<Figures />} />
           <Route path="matrix" element={<Matrix />} />
           <Route path="discover" element={<Discover />} />
+          <Route path="hypotheses" element={<Hypotheses />} />
           <Route path="reader/:paperId" element={<Reader />} />
           <Route path="gaps" element={<Gaps />} />
           <Route path="graph" element={<GraphView />} />
