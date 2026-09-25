@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from app.agents.base import llm_node
 from app.agents.prompts import GAP_SCHEMA, GAP_SYSTEM, gap_prompt
@@ -11,17 +12,11 @@ from app.agents.state import AgentState, trace_event
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 
 
-def gap_node(state: AgentState) -> AgentState:
+def gap_node(state: AgentState) -> dict[str, Any]:
     started = time.perf_counter()
     documents = state.get("documents") or []
 
-    if len(documents) < 2:
-        state["trace"] = [
-            *state.get("trace", []),
-            trace_event("gap", "warning", started, note="gap analysis is most reliable with 2+ papers"),
-        ]
-
-    state = llm_node(
+    delta = llm_node(
         name="gap",
         state=state,
         output_key="gaps",
@@ -31,10 +26,16 @@ def gap_node(state: AgentState) -> AgentState:
         temperature=0.35,
     )
 
-    gaps = state.get("gaps")
+    if len(documents) < 2:
+        delta["trace"] = [
+            trace_event("gap", "warning", started, note="gap analysis is most reliable with 2+ papers"),
+            *delta.get("trace", []),
+        ]
+
+    gaps = delta.get("gaps")
     if gaps:
-        state["gaps"] = _postprocess(gaps, documents)
-    return state
+        delta["gaps"] = _postprocess(gaps, documents)
+    return delta
 
 
 def _postprocess(gaps: dict, documents: list[dict]) -> dict:

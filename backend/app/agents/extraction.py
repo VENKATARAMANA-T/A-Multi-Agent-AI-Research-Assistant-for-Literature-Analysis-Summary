@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
-from app.agents.base import llm_node
+from app.agents.base import llm_node, merge_deltas
 from app.agents.cleanup import clean_name, strip_markers
+from app.agents.parallel import map_parallel
 from app.agents.prompts import EXTRACTION_SCHEMA, EXTRACTION_SYSTEM, extraction_prompt
 from app.agents.state import AgentState, format_paper_context, trace_event
 
@@ -13,17 +15,18 @@ LIST_FIELDS = ("tasks", "research_questions", "limitations", "tools", "cited_wor
 OBJECT_FIELDS = ("datasets", "methods", "metrics")
 
 
-def extract_node(state: AgentState) -> AgentState:
+def extract_node(state: AgentState) -> dict[str, Any]:
     """Extract structured entities from every loaded document, one call per paper."""
     started = time.perf_counter()
     documents = state.get("documents") or []
     if not documents:
-        state["errors"] = [*state.get("errors", []), "extract: no document loaded"]
-        state["trace"] = [*state.get("trace", []), trace_event("extract", "skipped", started, reason="no document")]
-        return state
+        return {
+            "errors": ["extract: no document loaded"],
+            "trace": [trace_event("extract", "skipped", started, reason="no document")],
+            "llm_calls": 0,
+        }
 
-    per_paper: list[dict] = []
-    for document in documents:
+    def extract_one(document: dict) -> dict[str, Any]:
         title = document.get("title") or document.get("id") or "Untitled"
         # Fresh bookkeeping per paper, otherwise the parent's counters are
         # copied in and then added back, double-counting every call.
@@ -34,7 +37,7 @@ def extract_node(state: AgentState) -> AgentState:
             "errors": [],
             "llm_calls": 0,
         }
-        single_state = llm_node(
+        return llm_node(
             name=f"extract[{title[:40]}]",
             state=single_state,
             output_key="extraction",
@@ -44,26 +47,32 @@ def extract_node(state: AgentState) -> AgentState:
             temperature=0.0,
         )
 
-        state["trace"] = [*state.get("trace", []), *single_state.get("trace", [])]
-        state["errors"] = [*state.get("errors", []), *single_state.get("errors", [])]
-        state["llm_calls"] = state.get("llm_calls", 0) + single_state.get("llm_calls", 0)
+    # The per-paper calls are independent, so run them concurrently. Results
+    # come back in input order, keeping the aggregate deterministic.
+    outcomes = map_parallel(extract_one, documents, label="extract")
+    merged = merge_deltas(outcomes)
 
-        payload = single_state.get("extraction")
+    per_paper: list[dict] = []
+    for document, single in zip(documents, outcomes):
+        payload = (single or {}).get("extraction")
         if payload:
             per_paper.append(
                 {
                     "paper_id": document.get("id"),
-                    "paper_title": title,
+                    "paper_title": document.get("title") or document.get("id") or "Untitled",
                     **normalise_extraction(payload),
                 }
             )
 
-    state["extraction"] = {"papers": per_paper, "aggregate": aggregate_extractions(per_paper)}
-    state["trace"] = [
-        *state.get("trace", []),
-        trace_event("extract", "ok" if per_paper else "error", started, papers=len(per_paper)),
-    ]
-    return state
+    return {
+        "extraction": {"papers": per_paper, "aggregate": aggregate_extractions(per_paper)},
+        "errors": merged["errors"],
+        "llm_calls": merged["llm_calls"],
+        "trace": [
+            *merged["trace"],
+            trace_event("extract", "ok" if per_paper else "error", started, papers=len(per_paper)),
+        ],
+    }
 
 
 def normalise_extraction(payload: dict) -> dict:

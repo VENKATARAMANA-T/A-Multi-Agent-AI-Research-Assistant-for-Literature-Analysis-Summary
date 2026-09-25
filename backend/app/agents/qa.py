@@ -2,25 +2,31 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from app.agents.base import llm_node
 from app.agents.prompts import QA_SCHEMA, QA_SYSTEM, qa_prompt
 from app.agents.state import AgentState
 
 
-def qa_node(state: AgentState) -> AgentState:
-    state = llm_node(
+def qa_node(state: AgentState) -> dict[str, Any]:
+    delta = llm_node(
         name="qa",
         state=state,
         output_key="answer",
-        build_prompt=lambda s: qa_prompt(s.get("question", ""), s.get("context", "")),
+        build_prompt=lambda s: qa_prompt(
+            s.get("question", ""),
+            s.get("context", ""),
+            (s.get("options") or {}).get("history"),
+        ),
         system_instruction=QA_SYSTEM,
         schema=QA_SCHEMA,
     )
 
-    answer = state.get("answer")
+    answer = delta.get("answer")
     if answer:
-        state["answer"] = attach_sources(answer, state.get("retrieved", []))
-    return state
+        delta["answer"] = attach_sources(answer, state.get("retrieved", []))
+    return delta
 
 
 def attach_sources(answer: dict, retrieved: list[dict]) -> dict:
@@ -44,6 +50,11 @@ def attach_sources(answer: dict, retrieved: list[dict]) -> dict:
                     "section": chunk.get("section"),
                     "score": chunk.get("score"),
                     "excerpt": (chunk.get("text") or "")[:400],
+                    # Carried through so the UI can show the chart itself next
+                    # to an answer that was drawn from one.
+                    "kind": chunk.get("kind", "text"),
+                    "figure_id": chunk.get("figure_id"),
+                    "label": chunk.get("label"),
                 }
             )
     answer["sources"] = resolved

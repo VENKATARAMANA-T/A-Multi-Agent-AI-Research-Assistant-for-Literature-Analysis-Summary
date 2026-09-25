@@ -5,9 +5,11 @@ from __future__ import annotations
 import logging
 import re
 import time
+from typing import Any
 
-from app.agents.base import llm_node
+from app.agents.base import llm_node, merge_deltas
 from app.agents.cleanup import clean_name
+from app.agents.parallel import map_parallel
 from app.agents.prompts import GRAPH_SCHEMA, GRAPH_SYSTEM, graph_prompt
 from app.agents.state import AgentState, format_paper_context, trace_event
 
@@ -35,20 +37,49 @@ def canonical_key(name: str) -> str:
     return cleaned.lower()
 
 
-def build_graph_node(state: AgentState) -> AgentState:
+def build_graph_node(state: AgentState) -> dict[str, Any]:
     """Extract entities/relations per paper, merge them, and persist the graph."""
     started = time.perf_counter()
     documents = state.get("documents") or []
     if not documents:
-        state["errors"] = [*state.get("errors", []), "graph: no document loaded"]
-        state["trace"] = [*state.get("trace", []), trace_event("graph", "skipped", started, reason="no document")]
-        return state
+        return {
+            "errors": ["graph: no document loaded"],
+            "trace": [trace_event("graph", "skipped", started, reason="no document")],
+            "llm_calls": 0,
+        }
 
     entities: dict[str, dict] = {}
     relations: dict[tuple[str, str, str], dict] = {}
     paper_nodes: list[dict] = []
 
-    for document in documents:
+    def extract_one(document: dict) -> dict[str, Any]:
+        title = document.get("title") or document.get("id") or "Untitled"
+        # Fresh bookkeeping per paper, otherwise the parent's counters are
+        # copied in and then added back, double-counting every call.
+        single_state: AgentState = {
+            **state,
+            "context": format_paper_context([document]),
+            "trace": [],
+            "errors": [],
+            "llm_calls": 0,
+        }
+        return llm_node(
+            name=f"graph[{title[:40]}]",
+            state=single_state,
+            output_key="graph",
+            build_prompt=lambda s, t=title: graph_prompt(t, s.get("context", "")),
+            system_instruction=GRAPH_SYSTEM,
+            schema=GRAPH_SCHEMA,
+            temperature=0.1,
+        )
+
+    # Fan the independent per-paper calls out, then merge sequentially below:
+    # merging mutates the shared entity/relation maps, so it stays on one thread
+    # and processes results in input order for a deterministic graph.
+    outcomes = map_parallel(extract_one, documents, label="graph")
+    merged = merge_deltas(outcomes)
+
+    for document, single in zip(documents, outcomes):
         paper_id = document.get("id")
         title = document.get("title") or paper_id or "Untitled"
         paper_nodes.append(
@@ -62,31 +93,8 @@ def build_graph_node(state: AgentState) -> AgentState:
             }
         )
 
-        # Fresh bookkeeping per paper, otherwise the parent's counters are
-        # copied in and then added back, double-counting every call.
-        single_state: AgentState = {
-            **state,
-            "context": format_paper_context([document]),
-            "trace": [],
-            "errors": [],
-            "llm_calls": 0,
-        }
-        single_state = llm_node(
-            name=f"graph[{title[:40]}]",
-            state=single_state,
-            output_key="graph",
-            build_prompt=lambda s, t=title: graph_prompt(t, s.get("context", "")),
-            system_instruction=GRAPH_SYSTEM,
-            schema=GRAPH_SCHEMA,
-            temperature=0.1,
-        )
-
-        state["trace"] = [*state.get("trace", []), *single_state.get("trace", [])]
-        state["errors"] = [*state.get("errors", []), *single_state.get("errors", [])]
-        state["llm_calls"] = state.get("llm_calls", 0) + single_state.get("llm_calls", 0)
-
-        fragment = single_state.get("graph") or {}
-        _merge_fragment(fragment, paper_id, title, entities, relations)
+        if single is not None:
+            _merge_fragment(single.get("graph") or {}, paper_id, title, entities, relations)
 
         # Authors become first-class nodes so co-authorship is visible.
         for author in (document.get("authors") or [])[:12]:
@@ -110,13 +118,17 @@ def build_graph_node(state: AgentState) -> AgentState:
                 },
             )
 
+    # Figures that the vision agent has read know which datasets, methods and
+    # metrics they depict. Linking them in means a chart is reachable from the
+    # concepts it illustrates, not just from its paper.
+    _merge_figures(documents, entities, relations, paper_nodes)
+
     graph = {
         "nodes": paper_nodes + list(entities.values()),
         "edges": list(relations.values()),
         "paper_ids": [doc.get("id") for doc in documents],
     }
-    state["graph"] = graph
-
+    errors = list(merged["errors"])
     persisted = False
     try:
         from app.services.graph_store import get_graph_store
@@ -124,20 +136,109 @@ def build_graph_node(state: AgentState) -> AgentState:
         persisted = get_graph_store().persist(graph)
     except Exception as exc:  # pragma: no cover - Neo4j optional
         logger.warning("Could not persist knowledge graph: %s", exc)
-        state["errors"] = [*state.get("errors", []), f"graph_store: {exc}"]
+        errors.append(f"graph_store: {exc}")
 
-    state["trace"] = [
-        *state.get("trace", []),
-        trace_event(
-            "graph",
-            "ok",
-            started,
-            nodes=len(graph["nodes"]),
-            edges=len(graph["edges"]),
-            persisted=persisted,
-        ),
-    ]
-    return state
+    return {
+        "graph": graph,
+        "errors": errors,
+        "llm_calls": merged["llm_calls"],
+        "trace": [
+            *merged["trace"],
+            trace_event(
+                "graph",
+                "ok",
+                started,
+                nodes=len(graph["nodes"]),
+                edges=len(graph["edges"]),
+                persisted=persisted,
+            ),
+        ],
+    }
+
+
+FIGURE_ENTITY_RELATIONS = {
+    "datasets": "EVALUATED_ON",
+    "methods": "USES",
+    "metrics": "MEASURES",
+}
+
+
+def _merge_figures(
+    documents: list[dict],
+    entities: dict[str, dict],
+    relations: dict[tuple[str, str, str], dict],
+    paper_nodes: list[dict],
+) -> None:
+    """Add analysed figures to the graph, linked to what they depict."""
+    try:
+        from sqlmodel import select
+
+        from app.database import session_scope
+        from app.models import Figure, FigureStatus
+    except Exception:  # pragma: no cover
+        return
+
+    paper_ids = [doc.get("id") for doc in documents if doc.get("id")]
+    if not paper_ids:
+        return
+
+    try:
+        with session_scope() as session:
+            figures = list(
+                session.exec(
+                    select(Figure).where(
+                        Figure.paper_id.in_(paper_ids),  # type: ignore[attr-defined]
+                        Figure.status == FigureStatus.ANALYSED,
+                    )
+                ).all()
+            )
+    except Exception:  # pragma: no cover
+        logger.warning("Could not load figures for the graph", exc_info=True)
+        return
+
+    for figure in figures:
+        node_id = f"figure:{figure.id}"
+        paper_nodes.append(
+            {
+                "id": node_id,
+                "name": f"{figure.label} — {figure.chart_type or figure.kind}",
+                "type": "Figure",
+                "paper_id": figure.paper_id,
+                "description": (figure.takeaway or figure.caption or "")[:400],
+                "papers": [figure.paper_id],
+            }
+        )
+        relations.setdefault(
+            (f"paper:{figure.paper_id}", node_id, "CONTAINS"),
+            {
+                "source": f"paper:{figure.paper_id}",
+                "target": node_id,
+                "type": "CONTAINS",
+                "papers": [figure.paper_id],
+                "evidence": figure.label,
+            },
+        )
+
+        # A figure depicting a dataset or method connects to that entity, so
+        # the chart is reachable from the concept it illustrates.
+        for field, relation in FIGURE_ENTITY_RELATIONS.items():
+            for name in (figure.entities or {}).get(field, []) or []:
+                key = canonical_key(name)
+                if not key:
+                    continue
+                target = entities.get(key)
+                if target is None:
+                    continue  # only link concepts the paper itself established
+                relations.setdefault(
+                    (node_id, target["id"], relation),
+                    {
+                        "source": node_id,
+                        "target": target["id"],
+                        "type": relation,
+                        "papers": [figure.paper_id],
+                        "evidence": f"depicted in {figure.label}",
+                    },
+                )
 
 
 def _merge_fragment(

@@ -1,4 +1,10 @@
-"""Shared plumbing for LLM-backed agent nodes."""
+"""Shared plumbing for LLM-backed agent nodes.
+
+Nodes return a *state delta*, not the whole state. The `trace`, `errors` and
+`llm_calls` channels carry `operator.add` reducers, so LangGraph merges the
+deltas itself — which is what lets the review pipeline fan out into concurrent
+branches without one branch's bookkeeping overwriting another's.
+"""
 
 from __future__ import annotations
 
@@ -28,19 +34,22 @@ def llm_node(
     temperature: float | None = None,
     require_context: bool = True,
     client: GeminiClient | None = None,
-) -> AgentState:
-    """Run one agent node: build prompt -> call Gemini -> store parsed JSON.
+) -> dict[str, Any]:
+    """Run one agent node: build prompt -> call Gemini -> return the parsed JSON.
 
-    Failures are recorded in `errors`/`trace` and the workflow continues, so a
-    single failing agent never takes down a multi-agent run.
+    Returns a delta containing `output_key` (on success) plus `trace`, `errors`
+    and `llm_calls`. Failures are recorded rather than raised, so a single
+    failing agent never takes down a multi-agent run.
     """
     started = time.perf_counter()
 
     if require_context and not (state.get("context") or "").strip():
         message = f"{name}: no context available"
-        state["errors"] = [*state.get("errors", []), message]
-        state["trace"] = [*state.get("trace", []), trace_event(name, "skipped", started, reason="empty context")]
-        return state
+        return {
+            "errors": [message],
+            "trace": [trace_event(name, "skipped", started, reason="empty context")],
+            "llm_calls": 0,
+        }
 
     llm = client or get_llm()
     try:
@@ -51,25 +60,48 @@ def llm_node(
             schema=schema,
             temperature=temperature,
         )
-        state[output_key] = payload  # type: ignore[literal-required]
-        state["llm_calls"] = state.get("llm_calls", 0) + 1
-        state["trace"] = [
-            *state.get("trace", []),
-            trace_event(name, "ok", started, prompt_chars=len(prompt), keys=sorted(payload.keys())),
-        ]
+        return {
+            output_key: payload,
+            "errors": [],
+            "trace": [
+                trace_event(name, "ok", started, prompt_chars=len(prompt), keys=sorted(payload.keys()))
+            ],
+            "llm_calls": 1,
+        }
     except LLMUnavailable as exc:
-        state["errors"] = [*state.get("errors", []), f"{name}: {exc}"]
-        state["trace"] = [*state.get("trace", []), trace_event(name, "unavailable", started, error=str(exc))]
+        return {
+            "errors": [f"{name}: {exc}"],
+            "trace": [trace_event(name, "unavailable", started, error=str(exc))],
+            "llm_calls": 0,
+        }
     except LLMError as exc:
         # Provider errors are multi-kilobyte JSON blobs; condense before they
         # reach a report, an API response, or a UI banner.
         message = summarise_provider_error(str(exc))
         logger.warning("%s agent failed: %s", name, message)
-        state["errors"] = [*state.get("errors", []), f"{name}: {message}"]
-        state["trace"] = [*state.get("trace", []), trace_event(name, "error", started, error=message)]
+        return {
+            "errors": [f"{name}: {message}"],
+            "trace": [trace_event(name, "error", started, error=message)],
+            "llm_calls": 0,
+        }
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("%s agent crashed", name)
-        state["errors"] = [*state.get("errors", []), f"{name}: {exc}"]
-        state["trace"] = [*state.get("trace", []), trace_event(name, "error", started, error=str(exc))]
+        return {
+            "errors": [f"{name}: {exc}"],
+            "trace": [trace_event(name, "error", started, error=str(exc))],
+            "llm_calls": 0,
+        }
 
-    return state
+
+def merge_deltas(deltas: list[dict[str, Any] | None]) -> dict[str, Any]:
+    """Combine sibling deltas produced by parallel per-paper calls."""
+    trace: list[dict[str, Any]] = []
+    errors: list[str] = []
+    calls = 0
+    for delta in deltas:
+        if not delta:
+            continue
+        trace.extend(delta.get("trace") or [])
+        errors.extend(delta.get("errors") or [])
+        calls += int(delta.get("llm_calls") or 0)
+    return {"trace": trace, "errors": errors, "llm_calls": calls}

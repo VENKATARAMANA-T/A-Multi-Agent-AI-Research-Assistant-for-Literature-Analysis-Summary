@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any
 
 from sqlmodel import select
 
@@ -86,42 +87,45 @@ def search(question: str, paper_ids: list[str] | None, top_k: int) -> list[Retri
     return [chunk for _, chunk in ranked[:top_k]]
 
 
-def retrieve_node(state: AgentState) -> AgentState:
+def retrieve_node(state: AgentState) -> dict[str, Any]:
     started = time.perf_counter()
     question = state.get("question", "").strip()
     top_k = state.get("top_k") or settings.retrieval_top_k
     paper_ids = state.get("paper_ids") or None
 
     if not question:
-        state["errors"] = [*state.get("errors", []), "retrieval: no question supplied"]
-        state["trace"] = [*state.get("trace", []), trace_event("retrieval", "skipped", started, reason="no question")]
-        return state
+        return {
+            "errors": ["retrieval: no question supplied"],
+            "trace": [trace_event("retrieval", "skipped", started, reason="no question")],
+        }
 
     try:
         chunks = search(question, paper_ids, top_k)
     except Exception as exc:
         logger.exception("Retrieval failed")
-        state["errors"] = [*state.get("errors", []), f"retrieval: {exc}"]
-        state["trace"] = [*state.get("trace", []), trace_event("retrieval", "error", started, error=str(exc))]
-        return state
+        return {
+            "errors": [f"retrieval: {exc}"],
+            "trace": [trace_event("retrieval", "error", started, error=str(exc))],
+        }
 
-    state["retrieved"] = [chunk.to_dict() for chunk in chunks]
-    state["context"] = format_chunk_context(chunks)
-    state["trace"] = [
-        *state.get("trace", []),
-        trace_event(
-            "retrieval",
-            "ok",
-            started,
-            hits=len(chunks),
-            queries=expand_query(question),
-            top_score=round(chunks[0].score, 4) if chunks else None,
-        ),
-    ]
-    return state
+    return {
+        "retrieved": [chunk.to_dict() for chunk in chunks],
+        "context": format_chunk_context(chunks),
+        "errors": [],
+        "trace": [
+            trace_event(
+                "retrieval",
+                "ok",
+                started,
+                hits=len(chunks),
+                queries=expand_query(question),
+                top_score=round(chunks[0].score, 4) if chunks else None,
+            )
+        ],
+    }
 
 
-def load_documents_node(state: AgentState) -> AgentState:
+def load_documents_node(state: AgentState) -> dict[str, Any]:
     """Load full paper text for the selected papers (all indexed papers if none given)."""
     started = time.perf_counter()
     paper_ids = state.get("paper_ids") or []
@@ -136,11 +140,12 @@ def load_documents_node(state: AgentState) -> AgentState:
     papers = [p for p in papers if p.status == PaperStatus.INDEXED]
     if not papers:
         message = "no indexed papers matched the request"
-        state["errors"] = [*state.get("errors", []), f"loader: {message}"]
-        state["trace"] = [*state.get("trace", []), trace_event("loader", "empty", started, reason=message)]
-        state["documents"] = []
-        state["context"] = ""
-        return state
+        return {
+            "documents": [],
+            "context": "",
+            "errors": [f"loader: {message}"],
+            "trace": [trace_event("loader", "empty", started, reason=message)],
+        }
 
     papers.sort(key=lambda p: (p.year or 0, p.title or ""))
     budget = _budget_for(len(papers))
@@ -158,18 +163,20 @@ def load_documents_node(state: AgentState) -> AgentState:
         for paper in papers
     ]
 
-    state["documents"] = documents
-    state["paper_ids"] = [paper.id for paper in papers]
-    state["context"] = format_paper_context(documents, max_chars_per_paper=budget)
-    state["trace"] = [
-        *state.get("trace", []),
-        trace_event(
-            "loader",
-            "ok",
-            started,
-            papers=len(documents),
-            budget_per_paper=budget,
-            context_chars=len(state["context"]),
-        ),
-    ]
-    return state
+    context = format_paper_context(documents, max_chars_per_paper=budget)
+    return {
+        "documents": documents,
+        "paper_ids": [paper.id for paper in papers],
+        "context": context,
+        "errors": [],
+        "trace": [
+            trace_event(
+                "loader",
+                "ok",
+                started,
+                papers=len(documents),
+                budget_per_paper=budget,
+                context_chars=len(context),
+            )
+        ],
+    }

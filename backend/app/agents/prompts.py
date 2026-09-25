@@ -36,12 +36,33 @@ QA_SCHEMA: dict[str, Any] = {
 }
 
 
-def qa_prompt(question: str, context: str) -> str:
+def format_history(history: list[dict] | None) -> str:
+    """Prior turns, so a follow-up like "why?" has something to refer to."""
+    if not history:
+        return ""
+    lines = []
+    for message in history:
+        role = "Researcher" if message.get("role") == "user" else "You"
+        content = str(message.get("content") or "").strip()
+        if content:
+            lines.append(f"{role}: {content}")
+    if not lines:
+        return ""
+    return (
+        "\n## Earlier in this conversation\n"
+        + "\n\n".join(lines)
+        + "\n\nThe question below may refer back to this. Resolve pronouns and "
+        "phrases like \"that method\" against it, but still ground your answer "
+        "only in the context above.\n"
+    )
+
+
+def qa_prompt(question: str, context: str, history: list[dict] | None = None) -> str:
     return f"""Answer the researcher's question using only the context below.
 
 ## Context
 {context}
-
+{format_history(history)}
 ## Question
 {question}
 

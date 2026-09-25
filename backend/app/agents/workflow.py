@@ -2,14 +2,17 @@
 
     router ─┬─ retrieve ─ qa ─────────────────────────────── END
             └─ load ─┬─ summarize ───────────────────────── END
-                     ├─ multi_summarize ─┐                 END
-                     ├─ extract ─────────┤                 END
-                     ├─ gap ─────────────┤                 END
-                     └─ build_graph ─────┘                 END
+                     ├─ multi_summarize ──┐
+                     ├─ extract ──────────┤
+                     ├─ gap ──────────────┼──────────────── END
+                     └─ build_graph ──────┘
 
-The `review` intent chains the branches together
-(load → multi_summarize → extract → gap → build_graph) to produce everything a
-literature review report needs in a single stateful run.
+A single-intent run enters exactly one branch. The `review` intent fans out to
+all four at once: they read the same loaded documents and write disjoint result
+keys, so running them serially only added latency. Reducers on `trace`,
+`errors` and `llm_calls` merge the concurrent branches' bookkeeping, and a
+global semaphore in the LLM client keeps the combined fan-out inside the
+provider's rate limit.
 """
 
 from __future__ import annotations
@@ -33,31 +36,41 @@ logger = logging.getLogger(__name__)
 REVIEW_INTENT: Intent = "review"
 
 
-def router_node(state: AgentState) -> AgentState:
+REVIEW_BRANCHES = ["multi_summarize", "extract", "gap", "build_graph"]
+
+
+def router_node(state: AgentState) -> dict[str, Any]:
     started = time.perf_counter()
-    state["trace"] = [
-        *state.get("trace", []),
-        trace_event(
-            "router",
-            "ok",
-            started,
-            intent=state.get("intent"),
-            papers=len(state.get("paper_ids") or []),
-        ),
-    ]
-    return state
+    return {
+        "trace": [
+            trace_event(
+                "router",
+                "ok",
+                started,
+                intent=state.get("intent"),
+                papers=len(state.get("paper_ids") or []),
+            )
+        ]
+    }
 
 
 def route_after_router(state: AgentState) -> str:
     return "retrieve" if state.get("intent") == "qa" else "load"
 
 
-def route_after_load(state: AgentState) -> str:
+def route_after_load(state: AgentState) -> str | list[str]:
+    """Dispatch to one agent, or — for `review` — fan out to all of them.
+
+    The four review agents read the same loaded documents and write disjoint
+    keys, so there is no reason to run them one after another. Returning a list
+    tells LangGraph to execute them concurrently; the reducers on `trace`,
+    `errors` and `llm_calls` merge their bookkeeping on the way back in.
+    """
     intent = state.get("intent")
     if not state.get("documents"):
         return END
     if intent == REVIEW_INTENT:
-        return "multi_summarize"
+        return REVIEW_BRANCHES
     return {
         "summarize": "summarize",
         "multi_summarize": "multi_summarize",
@@ -65,13 +78,6 @@ def route_after_load(state: AgentState) -> str:
         "gap": "gap",
         "graph": "build_graph",
     }.get(str(intent), END)
-
-
-def _continue_review(next_node: str):
-    def _route(state: AgentState) -> str:
-        return next_node if state.get("intent") == REVIEW_INTENT else END
-
-    return _route
 
 
 def build_workflow():
@@ -105,15 +111,10 @@ def build_workflow():
         },
     )
 
-    graph.add_edge("summarize", END)
-    graph.add_conditional_edges(
-        "multi_summarize", _continue_review("extract"), {"extract": "extract", END: END}
-    )
-    graph.add_conditional_edges("extract", _continue_review("gap"), {"gap": "gap", END: END})
-    graph.add_conditional_edges(
-        "gap", _continue_review("build_graph"), {"build_graph": "build_graph", END: END}
-    )
-    graph.add_edge("build_graph", END)
+    # Every branch terminates. For a single-intent run only one of them was
+    # entered; for `review` all four ran concurrently and LangGraph joins them.
+    for node in ("summarize", *REVIEW_BRANCHES):
+        graph.add_edge(node, END)
 
     return graph.compile()
 
