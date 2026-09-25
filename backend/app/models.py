@@ -189,6 +189,41 @@ class Conversation(SQLModel, table=True):
         return sum(1 for message in (self.messages or []) if message.get("role") == "user")
 
 
+class Hypothesis(SQLModel, table=True):
+    """A candidate connection found by literature-based discovery.
+
+    Saved so a promising lead survives the session it was found in — the point
+    of the technique is to surface things worth following up later.
+    """
+
+    __tablename__ = "hypotheses"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+
+    source_term: str = ""
+    target_term: str = ""
+    target_type: str = "Concept"
+    mode: str = "strict"          # strict (disjoint literatures) | unstated
+
+    support: int = 0
+    score: float = 0.0
+    chains: list[Any] = Field(default_factory=list, sa_column=Column(JSON))
+    paper_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+
+    # --- assessment ----------------------------------------------------------
+    verdict: Optional[str] = Field(default=None, index=True)
+    statement: Optional[str] = Field(default=None, sa_column=Column(Text))
+    reasoning: Optional[str] = Field(default=None, sa_column=Column(Text))
+    mechanism: Optional[str] = Field(default=None, sa_column=Column(Text))
+    proposed_test: Optional[str] = Field(default=None, sa_column=Column(Text))
+    novelty: Optional[str] = None
+    confidence: Optional[str] = None
+    why_not: Optional[str] = Field(default=None, sa_column=Column(Text))
+
+    starred: bool = False
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class MatrixRun(SQLModel, table=True):
     """A saved custom-column comparison across papers."""
 

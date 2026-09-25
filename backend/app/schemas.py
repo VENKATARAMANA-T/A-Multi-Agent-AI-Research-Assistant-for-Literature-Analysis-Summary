@@ -268,6 +268,57 @@ class MatrixRunSummary(BaseModel):
     created_at: datetime
 
 
+class LbdRequest(BaseModel):
+    source: str = Field(min_length=1, max_length=200)
+    target: Optional[str] = Field(default=None, max_length=200)
+    # "strict" is Swanson's criterion: A and C must share no paper at all.
+    # "unstated" relaxes that to any pair with no direct link, which is what a
+    # small corpus can actually produce.
+    mode: Literal["strict", "unstated"] = "strict"
+    limit: int = Field(default=15, ge=1, le=50)
+    min_support: int = Field(default=1, ge=1, le=10)
+    assess: bool = False
+    assess_limit: int = Field(default=5, ge=1, le=20)
+
+
+class LbdResponse(BaseModel):
+    source: str
+    mode: str
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    errors: list[str] = Field(default_factory=list)
+    llm_calls: int = 0
+    saved_ids: list[str] = Field(default_factory=list)
+
+
+class ClosedLbdResponse(BaseModel):
+    source: str
+    target: str
+    chains: list[dict[str, Any]] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+
+
+class HypothesisSummary(BaseModel):
+    id: str
+    source_term: str
+    target_term: str
+    target_type: str
+    mode: str
+    support: int
+    score: float
+    verdict: Optional[str] = None
+    statement: Optional[str] = None
+    reasoning: Optional[str] = None
+    mechanism: Optional[str] = None
+    proposed_test: Optional[str] = None
+    novelty: Optional[str] = None
+    confidence: Optional[str] = None
+    why_not: Optional[str] = None
+    chains: list[Any] = Field(default_factory=list)
+    starred: bool = False
+    created_at: datetime
+
+
 class DiscoveryResponse(BaseModel):
     query: str
     source: str = "openalex"

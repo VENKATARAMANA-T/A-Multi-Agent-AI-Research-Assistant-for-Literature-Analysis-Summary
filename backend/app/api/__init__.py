@@ -8,6 +8,7 @@ from app.api import (
     routes_figures,
     routes_graph,
     routes_jobs,
+    routes_lbd,
     routes_matrix,
     routes_papers,
     routes_reader,
@@ -26,5 +27,6 @@ api_router.include_router(routes_reports.router)
 api_router.include_router(routes_reader.router)
 api_router.include_router(routes_matrix.router)
 api_router.include_router(routes_discovery.router)
+api_router.include_router(routes_lbd.router)
 
 __all__ = ["api_router"]
