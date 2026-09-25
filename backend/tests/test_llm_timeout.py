@@ -77,6 +77,48 @@ def test_total_retry_window_is_bounded(monkeypatch):
     assert client.attempts <= 4
 
 
+def test_rate_limiter_spaces_requests_out(monkeypatch):
+    """A concurrency cap bounds calls in flight, not the rate they are issued.
+
+    Five papers fanned out with three workers still fired five requests within
+    a second, which a five-per-minute quota rejected outright.
+    """
+    import time as clock
+
+    limiter = llm_module._RateLimiter()
+    monkeypatch.setattr(llm_module.settings, "llm_requests_per_minute", 120)  # 0.5s apart
+
+    started = clock.perf_counter()
+    for _ in range(3):
+        limiter.acquire()
+    elapsed = clock.perf_counter() - started
+
+    # First is immediate, then two gaps of ~0.5s.
+    assert 0.8 < elapsed < 2.0, f"expected ~1s of spacing, got {elapsed:.2f}s"
+
+
+def test_rate_limiter_is_disabled_at_zero(monkeypatch):
+    import time as clock
+
+    limiter = llm_module._RateLimiter()
+    monkeypatch.setattr(llm_module.settings, "llm_requests_per_minute", 0)
+
+    started = clock.perf_counter()
+    for _ in range(5):
+        assert limiter.acquire() == 0.0
+    assert clock.perf_counter() - started < 0.1
+
+
+def test_rate_limiter_interval_follows_configuration(monkeypatch):
+    limiter = llm_module._RateLimiter()
+
+    monkeypatch.setattr(llm_module.settings, "llm_requests_per_minute", 5)
+    assert limiter.interval == 12.0
+
+    monkeypatch.setattr(llm_module.settings, "llm_requests_per_minute", 60)
+    assert limiter.interval == 1.0
+
+
 def test_minimum_timeout_floor(monkeypatch):
     """A nonsensical timeout must not become an instant-fail."""
     monkeypatch.setattr(llm_module.settings, "llm_timeout_seconds", 0)
