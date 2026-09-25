@@ -5,7 +5,9 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HF_HOME=/home/app/.cache/huggingface
 
-# PyMuPDF and torch wheels need a couple of runtime libraries.
+# PyMuPDF and torch need these; libgl1/libglib are also what opencv (pulled in
+# by the OCR engine) links against. No OCR binary is installed: RapidOCR ships
+# its models as ONNX inside the wheel.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential curl libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
@@ -22,6 +24,10 @@ COPY app ./app
 RUN python -c "from sentence_transformers import SentenceTransformer; \
     SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')" \
     || echo 'Model pre-download skipped; the app will fetch it at runtime.'
+
+# Warm the OCR models too, so the first scanned upload does not pay for it.
+RUN python -c "from rapidocr_onnxruntime import RapidOCR; RapidOCR()" \
+    || echo 'OCR warm-up skipped; the engine will initialise at runtime.'
 
 RUN useradd --create-home --uid 1000 app \
     && mkdir -p /app/data \

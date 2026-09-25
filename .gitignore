@@ -11,6 +11,10 @@ venv/
 backend/data/
 backend/.env
 
+# --- Build artefacts ----------------------------------------------------------
+# Regenerable package of the ingestion module; not source.
+paper-ingestion-search.zip
+
 # --- Node ---------------------------------------------------------------------
 node_modules/
 frontend/dist/
