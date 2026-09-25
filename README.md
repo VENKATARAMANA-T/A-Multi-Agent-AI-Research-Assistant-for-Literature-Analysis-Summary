@@ -94,6 +94,11 @@ docker compose up -d neo4j
 `POST /api/papers/upload` accepts up to 20 PDFs. Each file is validated (magic bytes, size
 limit) and de-duplicated by SHA-256, so re-uploading the same paper is a no-op.
 
+Indexing runs **in the background**: the endpoint returns a job immediately and the client
+follows per-file progress over server-sent events (`/api/jobs/{id}/stream`), so a large
+upload no longer holds the request open with no feedback. Pass `?wait=true` for the
+synchronous result, which is convenient for scripting and tests.
+
 ### Step 2 — Text and metadata extraction
 `app/services/pdf_extract.py` uses **PyMuPDF** to pull the text layer page by page. Metadata is
 recovered from three sources in order of trust: the PDF's own Info dictionary, layout
@@ -102,7 +107,59 @@ DOI, arXiv id, year, abstract and keywords. The full text is also sliced into ca
 sections (`introduction`, `method`, `results`, `limitations`, …), which later lets the system
 fit a long paper into a prompt by dropping the reference list rather than truncating blindly.
 
-Scanned PDFs with no text layer are rejected with a clear message — they need OCR first.
+**OCR for scanned pages.** A page with almost no text but substantial image coverage is
+rendered at 200 DPI and recognised with **RapidOCR** (ONNX, ships its own models — no system
+binary, unlike Tesseract). Gemini vision is available as an alternative but costs one request
+per page, so it is never selected silently.
+
+The decision is made **per page, not per document**: papers are frequently born-digital with a
+photocopied appendix, and recognising a page whose text layer is already perfect only degrades
+it. A page with no text *and* no images is blank, not scanned, and is skipped.
+
+Reading order is reconstructed rather than assumed — OCR returns boxes in detection order,
+which on a two-column paper interleaves the columns into nonsense. Lines are grouped into
+columns by the widest vertical gutter, then read top-to-bottom within each column.
+
+**A tuning note worth knowing.** At the engine's default `unclip_ratio` of 1.6 — tuned for
+signage, not documents — one line in four of tightly-spaced 9pt body text was **never detected
+at all**. The page rendered correctly and the ink was present; the line simply vanished with no
+error. `OCR_UNCLIP_RATIO` defaults to 2.0 here, which recovers every line while still keeping
+adjacent columns separate. A DPI sweep showed 200 is already the accuracy optimum, so raising
+it is not the fix (400 DPI was measurably *worse*). There is a regression test for this.
+
+Results are cached on the document's content hash, so re-indexing skips recognition entirely
+(measured: 4.8 s → 0.8 s). Papers, chunks and search results all carry a `source` of `native`
+or `ocr`, and the UI flags OCR-derived text because recognition can introduce errors.
+
+Anything unreadable fails with a message that says *why* — OCR disabled, no engine installed,
+or a scan too low-resolution to recognise — rather than a bare rejection.
+
+### Step 2b — Figures, charts and tables
+A results chart carries the paper's actual findings, and text extraction throws all of it
+away: a line plot becomes nothing, and a table becomes a run of numbers with no headings.
+
+Academic charts are usually **vector drawings rather than embedded rasters**, so
+`page.get_images()` finds almost nothing. What is reliably present is the caption, so regions
+are anchored on captions instead: a figure caption sits *below* its artwork, a table caption
+*above* its content. Tables are matched against PyMuPDF's table finder and never against
+graphics — unioning graphics below a table caption grabs the next figure on the page.
+
+A caption is distinguished from a cross-reference by the word after the number: *"Fig. 4
+depicts…"* is a sentence in the body text, while *"Fig. 4 | ROC curves…"* names the figure.
+
+The **Figure Agent** then reads each image with the vision model and returns the chart type,
+axis labels and units, the series and their trends, values readable off the plot, and what
+the figure demonstrates. Those descriptions are embedded, so *"which paper shows accuracy
+dropping after epoch 50?"* becomes answerable — a question no text chunk can satisfy.
+Analysed figures also join the knowledge graph, linked to the datasets and methods they
+depict, and a QA answer can cite a figure and show it.
+
+**Cost is explicit.** Extraction happens at ingestion and is free; reading a figure is one
+vision request each, so it is never automatic. The UI states the exact number of requests
+before you spend them, and tables whose contents were parsed directly from the PDF are marked
+*skipped* — a picture of them would add nothing.
+
+Verified against five real papers: 40 figures and tables extracted, checked by eye.
 
 ### Step 3 — Chunking
 **LangChain's `RecursiveCharacterTextSplitter`** with configurable size/overlap. Each chunk
@@ -143,8 +200,9 @@ router ─┬─ retrieve ─ qa ───────────────�
 | Research Gap | `gap` | Limitations, missing comparisons, under-explored intersections, each with a concrete proposed study |
 | Knowledge Graph | `build_graph` | Typed entities and relations; hallucinated edge endpoints are dropped |
 
-The `review` intent chains `load → multi_summarize → extract → gap → build_graph` in one
-stateful run — this is what report generation uses.
+The `review` intent **fans out to all four agents at once** — they read the same loaded
+documents and write disjoint result keys, so running them one after another only added
+latency. This is what report generation uses.
 
 Every run is written to an `agent_runs` audit table with its full execution trace, and the UI
 can expand that trace on any result.
@@ -153,12 +211,53 @@ can expand that trace on any result.
 `errors`/`trace`, the workflow continues, and the response comes back with `status: "partial"`.
 So a quota error during summarisation still leaves you the retrieved evidence and the graph.
 
+**Concurrency.** Nodes return state *deltas*, and the `trace` / `errors` / `llm_calls`
+channels carry reducers, so concurrent branches merge their bookkeeping instead of
+overwriting each other. `extract` and `build_graph` additionally fan out one call per paper.
+A single global semaphore (`LLM_MAX_CONCURRENCY`) bounds every in-flight request, because
+per-call-site limits would multiply across nested fan-outs and trip the per-minute quota.
+
+**Response cache.** Identical requests — same model, prompt, system instruction, temperature,
+token cap and schema — are served from a content-addressed SQLite cache. Measured live: a
+repeat call returned in **30 ms instead of 19.4 s and consumed no quota**. On the free tier,
+where the cap is requests *per day*, this is what makes re-running an analysis possible at all.
+Inspect it at `/api/cache`; clear it with `DELETE /api/cache`.
+
 ### Step 7 — Knowledge graph
 Extracted entities and relations are merged corpus-wide (canonical name keys collapse
 `BERT` / `bert` / `The BERT` into one node) and persisted to **Neo4j**. If Neo4j is unreachable,
 a JSON-file-backed in-memory store takes over transparently so the visualisation still works;
 the active backend is reported by `/api/health` and shown in the UI. The frontend renders it
 with **react-force-graph-2d**, with type filters and a minimum-degree slider.
+
+### Step 7b — Reading and comparing
+Five features that turn the corpus from something you query into something you work in.
+
+**In-app PDF reader with citation highlighting.** Click any citation in an answer and the paper
+opens at that page with the cited sentence highlighted. The rectangles are computed server-side
+with PyMuPDF rather than against the browser's text layer: extraction normalises ligatures and
+hyphenation, so the stored chunk text does not match the page byte-for-byte and needs the same
+engine that produced it. Search uses short phrases and falls back progressively; a miss still
+navigates to the right page and says so rather than failing silently.
+
+**Explain this passage.** Select any text in the reader and have it explained at one of three
+levels. Background the agent adds is returned separately from what the passage itself says, so
+the two are never confused.
+
+**Comparison matrix.** Define your own columns — sample size, hardware, whether code was
+released — and they are filled across every paper, one call per paper. Each cell carries the
+verbatim sentence supporting it, and a column the paper does not address comes back explicitly
+"not reported": a fabricated sample size is worse than a blank cell. Exports to CSV.
+
+**Discover.** Related work from **OpenAlex** (free, no API key), including a corpus-wide view
+that ranks the papers several of yours point at but which you do not have. Candidates are
+suggestions to review — nothing is added to the corpus automatically.
+
+**Citation export.** BibTeX, APA, IEEE, MLA and RIS from metadata already extracted, so it
+costs nothing and works without a key.
+
+**Conversation memory.** Follow-up questions keep the earlier turns, so "why?" resolves against
+what was just asked. The replayed window is bounded because each turn costs prompt tokens.
 
 ### Step 8 — Reports
 A literature review with a corpus table, synthesis, per-paper comparison table, corpus-wide
@@ -174,7 +273,23 @@ Interactive docs at `/docs`. Highlights:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/api/papers/upload` | Upload and index PDFs |
+| `POST` | `/api/papers/upload` | Upload PDFs; returns a job (`?wait=true` for the sync result) |
+| `GET` | `/api/jobs/{id}` | Job status and per-file progress |
+| `GET` | `/api/jobs/{id}/stream` | Live progress (server-sent events) |
+| `GET` | `/api/figures` | List extracted figures, charts and tables |
+| `GET` | `/api/figures/estimate` | How many vision requests an analysis would cost |
+| `POST` | `/api/figures/analyse` | Read figures with the vision model |
+| `GET` | `/api/figures/{id}/image` | The rendered figure image |
+| `GET` | `/api/reader/highlight` | Locate a cited passage in its PDF |
+| `POST` | `/api/reader/explain` | Explain a selected passage |
+| `GET` | `/api/reader/citations` | Export a bibliography (BibTeX/APA/IEEE/MLA/RIS) |
+| `POST` | `/api/matrix` | Fill custom comparison columns across papers |
+| `GET` | `/api/matrix/{id}/csv` | Download a comparison as CSV |
+| `GET` | `/api/discover/gaps` | Literature your corpus is missing |
+| `GET` | `/api/discover/search` | Search OpenAlex |
+| `GET` | `/api/agents/conversations` | Multi-turn question threads |
+| `GET` | `/api/cache` | LLM cache statistics |
+| `DELETE` | `/api/cache` | Clear the LLM cache |
 | `GET` | `/api/papers` | List papers (filter by `status`, `q`) |
 | `GET` | `/api/papers/{id}/chunks` | Inspect a paper's chunks |
 | `POST` | `/api/papers/{id}/reindex` | Re-run ingestion |
@@ -204,7 +319,27 @@ Backend settings come from `backend/.env` (see `backend/.env.example`).
 |---|---|---|
 | `GOOGLE_API_KEY` | — | Required for the agents. Ingestion and search work without it. |
 | `GEMINI_MODEL` | `gemini-flash-latest` | Pin a dated id for reproducibility |
+| `OCR_ENABLED` | `true` | Recover text from scanned pages |
+| `OCR_ENGINE` | `auto` | `auto` \| `rapidocr` \| `gemini` \| `none` |
+| `OCR_DPI` | `200` | Raise to 300 for poor scans |
+| `OCR_MIN_CHARS_PER_PAGE` | `120` | Below this a page is an OCR candidate |
+| `OCR_MIN_IMAGE_COVERAGE` | `0.25` | ...but only if images cover this much |
+| `OCR_MAX_PAGES_PER_DOCUMENT` | `40` | Guard against a huge scan |
+| `OCR_UNCLIP_RATIO` | `2.0` | Detector polygon expansion; below ~2.0 drops lines |
+| `FIGURES_ENABLED` | `true` | Extract figures and tables during ingestion |
+| `FIGURE_DPI` | `150` | Rendering resolution for figure images |
+| `FIGURE_MAX_PER_DOCUMENT` | `60` | Extraction cap per paper |
+| `FIGURE_MAX_ANALYSIS_BATCH` | `40` | Ceiling on one analysis request |
+| `DISCOVERY_ENABLED` | `true` | Related-paper lookup via OpenAlex |
+| `OPENALEX_CONTACT_EMAIL` | — | Optional; puts requests in OpenAlex's faster pool |
+| `CONVERSATION_MEMORY_TURNS` | `6` | Previous turns replayed into a follow-up |
+| `LLM_CACHE_ENABLED` | `true` | Serve identical requests from cache |
+| `LLM_CACHE_TTL_DAYS` | `30` | `0` disables expiry |
+| `LLM_MAX_CONCURRENCY` | `3` | Global ceiling on in-flight LLM calls |
+| `LLM_TIMEOUT_SECONDS` | `90` | Per-request deadline |
+| `LLM_TOTAL_RETRY_SECONDS` | `180` | Ceiling on one call's whole retry loop |
 | `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | |
+| `EMBEDDING_BACKEND` | `auto` | `auto` prefers ONNX, falls back to PyTorch |
 | `EMBEDDING_OFFLINE_FALLBACK` | `false` | Force the hashing embedder |
 | `NEO4J_ENABLED` | `true` | `false` uses the in-memory graph store |
 | `NEO4J_URI` | `bolt://localhost:7687` | |
@@ -230,7 +365,7 @@ cd backend
 .venv\Scripts\python -m pytest
 ```
 
-97 tests, no network access required — the suite runs against an isolated temp directory with
+296 tests, no network access required — the suite runs against an isolated temp directory with
 the offline embedder, Neo4j disabled, and a mocked Gemini client.
 
 Coverage:
@@ -249,6 +384,25 @@ Coverage:
 - **`test_llm_errors.py`** — retryable vs terminal provider errors, error condensation
 - **`test_output_cleanup.py`** — citation markers stripped from entity names, incomplete
   reports explaining themselves
+- **`test_llm_cache.py`** — key sensitivity (any input that changes the answer must miss),
+  hit/miss behaviour, and that a repeat call never reaches the provider
+- **`test_parallelism.py`** — ordered results from unordered completion, the concurrency cap,
+  and that no branch's trace is lost when four of them write state at once
+- **`test_jobs.py`** — background ingestion, per-file progress, partial failure, SSE streaming
+- **`test_llm_timeout.py`** — the request deadline and the bounded retry window
+- **`test_ocr.py`** — real recognition against image-only PDFs, the per-page decision,
+  two-column reading order, caching, and graceful degradation when no engine is available
+- **`test_figures.py`** — caption vs cross-reference, prose vs tabular content, region
+  placement against a PDF containing a real vector chart and a ruled table, the costed
+  vision pass, and figures becoming searchable and graph-connected
+- **`test_migration.py`** — additive schema changes, including that existing rows receive
+  the model's default rather than NULL
+- **`test_reader.py`** — citation styles across five formats, LaTeX escaping and key safety,
+  and real highlight coordinates located in an actual PDF
+- **`test_matrix.py`** — column preparation, evidence on every cell, that a silent paper is
+  marked "not reported" rather than guessed, and CSV export
+- **`test_discovery_and_memory.py`** — OpenAlex parsing and de-duplication (network stubbed),
+  and that a follow-up question actually receives the earlier turns
 
 Tests build real PDFs with PyMuPDF rather than using fixtures, so extraction is exercised
 against genuine PDF structure.
@@ -291,11 +445,21 @@ docker-compose.yml
 
 ## Known limits
 
-- **Scanned PDFs** are rejected — there is no OCR stage.
+- **Figure regions are heuristic.** Caption anchoring is accurate on the standard layouts —
+  verified by eye on five real papers — but a full-width figure on a two-column page can pull
+  a neighbouring column of body text into its crop. The region is still centred on the right
+  artwork; it is simply not tightly cropped. Figures whose captions the PDF does not mark in a
+  recognisable way are missed entirely.
+
+- **OCR'd text is imperfect.** Recognition is accurate on clean scans but degrades with low
+  resolution, skew and handwriting, and there is no de-skew or de-noise stage. Raise `OCR_DPI`
+  to 300 for poor scans. OCR-derived text is flagged throughout the UI rather than presented
+  as equivalent to a native text layer.
 - **Metadata heuristics** handle common two-column academic layouts well; unusual title pages
   may yield a wrong title or author list. Every field is editable via reindex, and the LLM
   extraction agent can recover what the heuristics miss.
-- **Ingestion is synchronous.** A 20-file upload holds the request open. A job queue would be
-  the right answer for larger corpora.
+- **The job queue is in-process.** Background ingestion runs on a thread pool inside the API
+  process, so jobs do not survive a restart (they are marked failed on the next boot rather
+  than resuming). A separate worker would be the right answer for a multi-instance deployment.
 - **The knowledge graph merges on normalised names**, so genuinely distinct entities sharing a
   name will collapse into one node.
