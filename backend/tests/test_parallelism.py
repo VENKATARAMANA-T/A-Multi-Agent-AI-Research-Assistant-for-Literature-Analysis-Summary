@@ -148,6 +148,7 @@ def test_trace_is_not_duplicated_by_the_reducer(sample_pdf, fake_llm):
     nodes = [event["node"] for event in result["trace"]]
     assert nodes.count("router") == 1
     assert nodes.count("retrieval") == 1
+    assert nodes.count("graph_retrieval") == 1
     assert nodes.count("qa") == 1
 
 
