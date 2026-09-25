@@ -12,12 +12,22 @@ sqlalchemy==2.0.36
 # --- PDF / text extraction ---------------------------------------------------
 PyMuPDF==1.25.1
 
+# --- OCR for scanned pages ---------------------------------------------------
+# RapidOCR ships its own ONNX models and needs no system binary, unlike
+# Tesseract which would require a separate installer on every machine and in
+# the image. It pulls opencv-python, which needs libgl1 (see the Dockerfile).
+rapidocr-onnxruntime==1.2.3
+pillow==11.1.0
+
 # --- Chunking ----------------------------------------------------------------
 langchain-text-splitters==0.3.4
 
 # --- Embeddings + vector store ----------------------------------------------
 chromadb==0.5.23
 sentence-transformers==3.3.1
+# Optional ONNX embedding path — 2-3x faster on CPU than the PyTorch route.
+# The app falls back to sentence-transformers automatically if it is absent.
+fastembed==0.5.1
 
 # --- Multi-agent orchestration ----------------------------------------------
 langgraph==0.2.60
