@@ -30,6 +30,9 @@ os.environ.update(
         # OCR is off by default so the bulk of the suite stays fast; the tests
         # that exercise it turn it on via the `ocr_enabled` fixture.
         "OCR_ENABLED": "false",
+        # No throttling against the fake client — otherwise every mocked call
+        # would sleep for the real rate-limit interval.
+        "LLM_REQUESTS_PER_MINUTE": "0",
         "CHUNK_SIZE": "600",
         "CHUNK_OVERLAP": "80",
         "LOG_LEVEL": "WARNING",

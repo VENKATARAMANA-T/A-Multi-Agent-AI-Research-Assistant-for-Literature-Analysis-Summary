@@ -259,6 +259,36 @@ costs nothing and works without a key.
 **Conversation memory.** Follow-up questions keep the earlier turns, so "why?" resolves against
 what was just asked. The replayed window is bounded because each turn costs prompt tokens.
 
+### Step 7c — Literature-Based Discovery
+Connections the corpus implies but never states.
+
+If one paper links A→B and a different paper links B→C, while nothing links A→C and no paper
+mentions both ends, then A→C is a candidate discovery. Swanson found the fish-oil/Raynaud's
+connection this way in 1986, from two literatures that did not cite each other.
+
+Two rules decide whether a candidate is a discovery rather than an artefact:
+
+- **Disjointness.** A and C must share no paper. If they co-occur even once, the connection is
+  already known.
+- **Hub suppression.** A term connected to everything — "model", "accuracy" — links everything
+  to everything. Each intermediate is weighted by inverse degree, so a term shared by two
+  entities counts far more than one shared by forty. Without this the ranking is meaningless.
+
+**Entity resolution matters more than the traversal.** Papers introduce a term in full and then
+use its acronym, so "Convolutional Neural Network (CNN)" and "CNN" arrive as two unconnected
+nodes, nothing bridges the two papers, and every chain stays inside one paper — the method
+returns nothing. Aliases are merged before traversal, which is what creates the cross-paper
+bridges the technique depends on.
+
+Two modes are offered because a small corpus has no disjoint literatures at all:
+`strict` applies Swanson's criterion, `unstated` only requires that no paper states the link
+directly. The **Hypothesis Agent** then judges the survivors, states each as a falsifiable
+claim, and proposes a test — and is expected to reject most of them.
+
+> **Scale matters.** The technique was designed for literatures of thousands of papers. On five
+> papers the mechanism works and is tested, but the yield is small; strict mode may return
+> nothing at all, and the diagnostics say exactly why.
+
 ### Step 8 — Reports
 A literature review with a corpus table, synthesis, per-paper comparison table, corpus-wide
 dataset/method/metric tables, research gaps, a knowledge-graph summary and references —
@@ -286,6 +316,9 @@ Interactive docs at `/docs`. Highlights:
 | `POST` | `/api/matrix` | Fill custom comparison columns across papers |
 | `GET` | `/api/matrix/{id}/csv` | Download a comparison as CSV |
 | `GET` | `/api/discover/gaps` | Literature your corpus is missing |
+| `POST` | `/api/lbd` | Implied connections (Swanson ABC model) |
+| `POST` | `/api/lbd/closed` | Why are two concepts linked? |
+| `GET` | `/api/lbd/hypotheses` | Saved hypotheses |
 | `GET` | `/api/discover/search` | Search OpenAlex |
 | `GET` | `/api/agents/conversations` | Multi-turn question threads |
 | `GET` | `/api/cache` | LLM cache statistics |
@@ -336,6 +369,7 @@ Backend settings come from `backend/.env` (see `backend/.env.example`).
 | `LLM_CACHE_ENABLED` | `true` | Serve identical requests from cache |
 | `LLM_CACHE_TTL_DAYS` | `30` | `0` disables expiry |
 | `LLM_MAX_CONCURRENCY` | `3` | Global ceiling on in-flight LLM calls |
+| `LLM_REQUESTS_PER_MINUTE` | `5` | Rate limit; `0` disables. Matches the free tier |
 | `LLM_TIMEOUT_SECONDS` | `90` | Per-request deadline |
 | `LLM_TOTAL_RETRY_SECONDS` | `180` | Ceiling on one call's whole retry loop |
 | `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | |
@@ -365,7 +399,7 @@ cd backend
 .venv\Scripts\python -m pytest
 ```
 
-296 tests, no network access required — the suite runs against an isolated temp directory with
+334 tests, no network access required — the suite runs against an isolated temp directory with
 the offline embedder, Neo4j disabled, and a mocked Gemini client.
 
 Coverage:
@@ -403,6 +437,10 @@ Coverage:
   marked "not reported" rather than guessed, and CSV export
 - **`test_discovery_and_memory.py`** — OpenAlex parsing and de-duplication (network stubbed),
   and that a follow-up question actually receives the earlier turns
+- **`test_lbd.py`** — reproduces Swanson's fish-oil/Raynaud's finding in miniature, and pins
+  the rules that make it a discovery: an already-stated link is rejected, shared papers are not
+  disjoint literatures, hub terms are discounted below specific ones, and an acronym merges
+  with its expansion
 
 Tests build real PDFs with PyMuPDF rather than using fixtures, so extraction is exercised
 against genuine PDF structure.
