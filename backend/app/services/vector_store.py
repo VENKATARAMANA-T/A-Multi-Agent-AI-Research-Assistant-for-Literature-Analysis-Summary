@@ -33,6 +33,10 @@ class RetrievedChunk:
     page_end: int | None = None
     section: str | None = None
     paper_title: str | None = None
+    source: str = "native"
+    kind: str = "text"              # "text" or "figure"
+    figure_id: str | None = None
+    label: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -45,6 +49,10 @@ class RetrievedChunk:
             "page_start": self.page_start,
             "page_end": self.page_end,
             "section": self.section,
+            "source": self.source,
+            "kind": self.kind,
+            "figure_id": self.figure_id,
+            "label": self.label,
         }
 
     def citation(self) -> str:
@@ -143,6 +151,7 @@ class VectorStore:
                     "page_start": chunk.page_start if chunk.page_start is not None else -1,
                     "page_end": chunk.page_end if chunk.page_end is not None else -1,
                     "section": chunk.section or "",
+                    "source": chunk.source or "native",
                 }
             )
 
@@ -157,6 +166,51 @@ class VectorStore:
                 metadatas=metadatas[start:stop],
             )
         return len(texts)
+
+    def add_figures(self, figures: list[Any], paper_title: str | None = None) -> int:
+        """Index figures in the same collection as text, tagged `kind=figure`.
+
+        A chart's meaning lives in its caption and its analysis, so embedding
+        those makes "which paper shows accuracy dropping after epoch 50?"
+        answerable — something no text chunk contains.
+        """
+        if not figures:
+            return 0
+
+        documents = [figure.search_text for figure in figures]
+        ids = [f"figure:{figure.id}" for figure in figures]
+        vectors = get_embedder().embed_documents(documents)
+
+        metadatas = [
+            {
+                "paper_id": figure.paper_id,
+                "paper_title": paper_title or "",
+                "kind": "figure",
+                "figure_id": figure.id,
+                "figure_kind": figure.kind,
+                "label": figure.label or "",
+                "index": 0,
+                "page_start": figure.page or -1,
+                "page_end": figure.page or -1,
+                "section": "",
+                "source": "figure",
+            }
+            for figure in figures
+        ]
+
+        batch = 128
+        for start in range(0, len(documents), batch):
+            stop = start + batch
+            self._collection.upsert(
+                ids=ids[start:stop],
+                documents=documents[start:stop],
+                embeddings=vectors[start:stop],
+                metadatas=metadatas[start:stop],
+            )
+        return len(documents)
+
+    def delete_paper_figures(self, paper_id: str) -> None:
+        self._collection.delete(where={"$and": [{"paper_id": paper_id}, {"kind": "figure"}]})
 
     def delete_paper(self, paper_id: str) -> None:
         self._collection.delete(where={"paper_id": paper_id})
@@ -181,20 +235,26 @@ class VectorStore:
         paper_ids: list[str] | None = None,
     ) -> list[RetrievedChunk]:
         top_k = top_k or settings.retrieval_top_k
-        if self.count() == 0:
-            return []
 
         where: dict[str, Any] | None = None
         if paper_ids:
             where = {"paper_id": {"$in": list(paper_ids)}} if len(paper_ids) > 1 else {"paper_id": paper_ids[0]}
 
         vector = get_embedder().embed_query(query)
-        result = self._collection.query(
-            query_embeddings=[vector],
-            n_results=max(1, top_k),
-            where=where,
-            include=["documents", "metadatas", "distances"],
-        )
+        try:
+            result = self._collection.query(
+                query_embeddings=[vector],
+                n_results=max(1, top_k),
+                where=where,
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception:
+            # Querying an empty collection raises rather than returning nothing.
+            # Checking count() first would cost an extra round trip on every
+            # search just to handle the empty case, so handle it here instead.
+            if self.count() == 0:
+                return []
+            raise
 
         ids = (result.get("ids") or [[]])[0]
         documents = (result.get("documents") or [[]])[0]
@@ -218,6 +278,10 @@ class VectorStore:
                     page_start=int(page_start) if page_start not in (None, -1) else None,
                     page_end=int(page_end) if page_end not in (None, -1) else None,
                     section=str(meta.get("section") or "") or None,
+                    source=str(meta.get("source") or "native"),
+                    kind=str(meta.get("kind") or "text"),
+                    figure_id=str(meta.get("figure_id") or "") or None,
+                    label=str(meta.get("label") or "") or None,
                 )
             )
         return retrieved
