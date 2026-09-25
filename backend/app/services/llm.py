@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
@@ -46,6 +47,49 @@ _call_pool = ThreadPoolExecutor(
 )
 
 MAX_ATTEMPTS = 4
+
+
+class _RateLimiter:
+    """Spaces requests out to stay under a requests-per-minute cap.
+
+    The semaphore above limits how many calls are *in flight*; it does nothing
+    about how quickly they are issued. A five-paper fan-out with three workers
+    still fires five requests within a second, which a five-per-minute quota
+    rejects outright. This enforces a minimum gap between request starts.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._next_allowed = 0.0
+
+    @property
+    def interval(self) -> float:
+        rpm = settings.llm_requests_per_minute
+        return 60.0 / rpm if rpm and rpm > 0 else 0.0
+
+    def acquire(self) -> float:
+        """Block until the next request may start. Returns the seconds waited."""
+        interval = self.interval
+        if interval <= 0:
+            return 0.0
+
+        with self._lock:
+            now = time.monotonic()
+            start_at = max(now, self._next_allowed)
+            self._next_allowed = start_at + interval
+            delay = start_at - now
+
+        if delay > 0:
+            logger.debug("Rate limit: waiting %.1fs before the next request", delay)
+            time.sleep(delay)
+        return delay
+
+    def reset(self) -> None:
+        with self._lock:
+            self._next_allowed = 0.0
+
+
+_rate_limiter = _RateLimiter()
 
 
 def _stop_retrying(retry_state) -> bool:
@@ -180,6 +224,7 @@ class GeminiClient:
         timeout = max(5, settings.llm_timeout_seconds)
 
         with _inflight:
+            _rate_limiter.acquire()
             future = _call_pool.submit(
                 client.models.generate_content,
                 model=self.model,

@@ -121,6 +121,13 @@ class Settings(BaseSettings):
     # free tier also caps requests per minute, and a wide fan-out trips it.
     llm_max_concurrency: int = 3
 
+    # Requests per minute. A concurrency limit bounds how many calls run at
+    # once but not how fast they are issued, and the free tier's cap is a
+    # *rate* — five per minute, at which a five-paper fan-out fails entirely
+    # even with only three in flight. 0 disables throttling; raise it or set 0
+    # once billing is enabled.
+    llm_requests_per_minute: int = 5
+
     # --- Neo4j ---------------------------------------------------------------
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
