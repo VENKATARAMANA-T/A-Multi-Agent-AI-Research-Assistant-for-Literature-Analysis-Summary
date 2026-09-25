@@ -40,7 +40,7 @@ MIN_SUPPORT = 1
 DEFAULT_LIMIT = 25
 
 
-def _resolve_entities(nodes: dict[str, dict]) -> dict[str, str]:
+def resolve_entities(nodes: dict[str, dict]) -> dict[str, str]:
     """Map each node id to the id of the entity it really is.
 
     Two nodes are the same entity when any of their surface forms match — the
@@ -170,7 +170,7 @@ class DiscoveryGraph:
         self,
         graph: dict[str, Any],
         allowed_types: Iterable[str] | None = None,
-        resolve_entities: bool = True,
+        merge_aliases: bool = True,
     ):
         allowed = frozenset(allowed_types) if allowed_types else SCIENTIFIC_TYPES
 
@@ -181,7 +181,7 @@ class DiscoveryGraph:
         }
 
         self._alias: dict[str, str] = (
-            _resolve_entities(raw) if resolve_entities else {node_id: node_id for node_id in raw}
+            resolve_entities(raw) if merge_aliases else {node_id: node_id for node_id in raw}
         )
 
         # Collapse merged nodes, unioning their papers and keeping the longest
