@@ -18,26 +18,66 @@ def qa_node(state: AgentState) -> dict[str, Any]:
             s.get("question", ""),
             s.get("context", ""),
             (s.get("options") or {}).get("history"),
+            s.get("graph_context", ""),
         ),
+        # In graph-only mode there are no text excerpts, but the graph facts
+        # are context in their own right.
+        require_context=not (state.get("graph_context") or "").strip(),
         system_instruction=QA_SYSTEM,
         schema=QA_SCHEMA,
     )
 
     answer = delta.get("answer")
     if answer:
-        delta["answer"] = attach_sources(answer, state.get("retrieved", []))
+        delta["answer"] = attach_sources(
+            answer,
+            state.get("retrieved", []),
+            state.get("graph_facts", []),
+        )
     return delta
 
 
-def attach_sources(answer: dict, retrieved: list[dict]) -> dict:
-    """Resolve the [S#] markers the model cited back to real chunk records."""
+def attach_sources(
+    answer: dict,
+    retrieved: list[dict],
+    graph_facts: list[dict] | None = None,
+) -> dict:
+    """Resolve the [S#] and [G#] markers the model cited back to real records.
+
+    A marker that resolves to nothing is dropped rather than shown: a citation
+    the reader cannot follow is worse than no citation.
+    """
     markers = answer.get("supporting_sources") or []
     resolved = []
+    graph_facts = graph_facts or []
+    graph_sources = []
+
     for marker in markers:
-        digits = "".join(ch for ch in str(marker) if ch.isdigit())
+        text = str(marker).strip()
+        digits = "".join(ch for ch in text if ch.isdigit())
         if not digits:
             continue
         idx = int(digits) - 1
+
+        # A "G" marker points at a relationship, not a passage.
+        if text.upper().lstrip("[").startswith("G"):
+            if 0 <= idx < len(graph_facts):
+                fact = graph_facts[idx]
+                graph_sources.append(
+                    {
+                        "marker": f"G{idx + 1}",
+                        "kind": "graph",
+                        "sentence": fact.get("sentence"),
+                        "relation": fact.get("relation"),
+                        "source": fact.get("source"),
+                        "target": fact.get("target"),
+                        "paper_ids": fact.get("papers") or [],
+                        "paper_titles": fact.get("paper_titles") or [],
+                        "evidence": fact.get("evidence"),
+                    }
+                )
+            continue
+
         if 0 <= idx < len(retrieved):
             chunk = retrieved[idx]
             resolved.append(
@@ -57,5 +97,7 @@ def attach_sources(answer: dict, retrieved: list[dict]) -> dict:
                     "label": chunk.get("label"),
                 }
             )
+
     answer["sources"] = resolved
+    answer["graph_sources"] = graph_sources
     return answer

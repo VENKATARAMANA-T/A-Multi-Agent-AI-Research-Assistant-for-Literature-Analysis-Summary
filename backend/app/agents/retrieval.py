@@ -92,6 +92,15 @@ def retrieve_node(state: AgentState) -> dict[str, Any]:
     question = state.get("question", "").strip()
     top_k = state.get("top_k") or settings.retrieval_top_k
     paper_ids = state.get("paper_ids") or None
+    mode = (state.get("options") or {}).get("retrieval_mode", "hybrid")
+
+    if mode == "graph":
+        # Graph-only: the answer must rest on relationships alone.
+        return {
+            "retrieved": [],
+            "context": "",
+            "trace": [trace_event("retrieval", "skipped", started, reason="graph-only mode")],
+        }
 
     if not question:
         return {
@@ -120,6 +129,77 @@ def retrieve_node(state: AgentState) -> dict[str, Any]:
                 hits=len(chunks),
                 queries=expand_query(question),
                 top_score=round(chunks[0].score, 4) if chunks else None,
+            )
+        ],
+    }
+
+
+def graph_retrieve_node(state: AgentState) -> dict[str, Any]:
+    """Retrieve facts by walking the knowledge graph.
+
+    Runs after vector retrieval and writes separate keys, so the two forms of
+    context complement rather than overwrite each other. A question with no
+    matching entity yields nothing and the answer rests on the text alone —
+    inventing a subgraph would be worse than having none.
+    """
+    started = time.perf_counter()
+    mode = (state.get("options") or {}).get("retrieval_mode", "hybrid")
+
+    if mode == "vector":
+        return {"graph_facts": [], "graph_context": "", "graph_matches": []}
+
+    question = state.get("question", "").strip()
+    if not question:
+        return {
+            "graph_facts": [],
+            "graph_context": "",
+            "graph_matches": [],
+            "trace": [trace_event("graph_retrieval", "skipped", started, reason="no question")],
+        }
+
+    try:
+        from app.services.graph_retrieval import format_facts, retrieve
+
+        context = retrieve(question, paper_ids=state.get("paper_ids") or None)
+    except Exception as exc:
+        logger.exception("Graph retrieval failed")
+        return {
+            "graph_facts": [],
+            "graph_context": "",
+            "graph_matches": [],
+            "errors": [f"graph_retrieval: {exc}"],
+            "trace": [trace_event("graph_retrieval", "error", started, error=str(exc))],
+        }
+
+    if not context.found:
+        return {
+            "graph_facts": [],
+            "graph_context": "",
+            "graph_matches": [match.to_dict() for match in context.matches],
+            "trace": [
+                trace_event(
+                    "graph_retrieval",
+                    "empty",
+                    started,
+                    reason=context.reason,
+                    matched=len(context.matches),
+                )
+            ],
+        }
+
+    return {
+        "graph_facts": [fact.to_dict() for fact in context.facts],
+        "graph_context": format_facts(context.facts),
+        "graph_matches": [match.to_dict() for match in context.matches],
+        "errors": [],
+        "trace": [
+            trace_event(
+                "graph_retrieval",
+                "ok",
+                started,
+                matched=[match.name for match in context.matches],
+                facts=len(context.facts),
+                papers=len(context.paper_ids),
             )
         ],
     }

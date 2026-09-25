@@ -57,18 +57,43 @@ def format_history(history: list[dict] | None) -> str:
     )
 
 
-def qa_prompt(question: str, context: str, history: list[dict] | None = None) -> str:
+def format_graph_context(graph_context: str | None) -> str:
+    """Relationships drawn from the knowledge graph, cited as [G#].
+
+    These answer questions no single passage can — "which methods were
+    evaluated on the same dataset as X" lives in the links between papers, not
+    in any one of them.
+    """
+    if not (graph_context or "").strip():
+        return ""
+    return (
+        "\n## Relationships from the knowledge graph\n"
+        "Each line is a relationship extracted from the papers, with the paper "
+        "that asserts it. Cite these as [G1], [G2] — the same way as the text "
+        "excerpts, and only when you actually use them.\n\n"
+        f"{graph_context}\n"
+    )
+
+
+def qa_prompt(
+    question: str,
+    context: str,
+    history: list[dict] | None = None,
+    graph_context: str | None = None,
+) -> str:
+    excerpts = f"## Context\n{context}\n" if (context or "").strip() else ""
     return f"""Answer the researcher's question using only the context below.
 
-## Context
-{context}
-{format_history(history)}
+{excerpts}{format_graph_context(graph_context)}{format_history(history)}
 ## Question
 {question}
 
 ## Instructions
 - Write a precise, technical answer of 3-8 sentences. Longer only if the question demands it.
 - Cite the source markers inline, e.g. "the model reaches 91.2 F1 [S2]".
+- Where a relationship answers the question, cite it the same way, e.g.
+  "both were evaluated on UA-Speech [G3]". A question about how things relate to
+  each other is often answerable only from those relationships.
 - If the context is insufficient, set confidence to "low" and state exactly what is missing.
 - `supporting_sources` must list only markers that appear in your answer.
 - Suggest 2-3 sharper follow-up questions the researcher could ask next.
