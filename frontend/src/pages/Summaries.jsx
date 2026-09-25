@@ -2,6 +2,7 @@ import { useState } from 'react';
 import api from '../api/client';
 import AgentTrace from '../components/AgentTrace';
 import PaperPicker from '../components/PaperPicker';
+import VerificationBadge from '../components/VerificationBadge';
 import { BulletList, Card, ErrorBanner, Spinner, WarningBanner } from '../components/common';
 import { useCorpus } from '../context/CorpusContext';
 
@@ -167,6 +168,18 @@ export default function Summaries() {
                 </Card>
               </div>
             </>
+          )}
+
+          {summary && (
+            <Card title="Fact check" subtitle="Each claim re-checked against evidence retrieved for it">
+              <VerificationBadge
+                runId={result.run_id}
+                paperIds={result.paper_ids}
+                source={scope === 'single' ? 'summarize' : 'multi_summarize'}
+                subject={summary.paper_title || 'Corpus synthesis'}
+                label="Verify this summary"
+              />
+            </Card>
           )}
 
           {result && (

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../api/client';
 import AgentTrace from '../components/AgentTrace';
 import PaperPicker from '../components/PaperPicker';
+import VerificationBadge from '../components/VerificationBadge';
 import { Badge, Card, ErrorBanner, Spinner, WarningBanner, statusTone } from '../components/common';
 import { useCorpus } from '../context/CorpusContext';
 
@@ -259,6 +260,17 @@ export default function Ask() {
                       ))}
                     </ul>
                   </details>
+                )}
+
+                {entry.result.answer?.answer && (
+                  <VerificationBadge
+                    text={entry.result.answer.answer}
+                    paperIds={entry.result.paper_ids}
+                    runId={entry.result.run_id}
+                    source="qa"
+                    subject={entry.question}
+                    label="Verify this answer"
+                  />
                 )}
 
                 <AgentTrace
