@@ -30,6 +30,11 @@ class AgentState(TypedDict, total=False):
     retrieved: list[dict[str, Any]]
     context: str
     documents: list[dict[str, Any]]
+    # GraphRAG writes its own keys so it can run alongside vector retrieval
+    # without the two nodes contending for `context`.
+    graph_facts: list[dict[str, Any]]
+    graph_context: str
+    graph_matches: list[dict[str, Any]]
 
     # --- outputs -------------------------------------------------------------
     answer: dict[str, Any]

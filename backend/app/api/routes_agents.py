@@ -81,6 +81,7 @@ def ask(payload: AskRequest, session: Session = Depends(get_session)) -> AgentRu
         paper_ids=paper_ids,
         top_k=payload.top_k,
         history=history,
+        retrieval_mode=payload.mode,
     )
 
     if payload.conversation_id or payload.start_conversation:

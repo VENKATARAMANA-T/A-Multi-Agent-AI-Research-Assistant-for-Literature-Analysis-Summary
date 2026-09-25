@@ -191,6 +191,10 @@ class AskRequest(BaseModel):
     # Continue an existing thread, so a follow-up can say "why?" and be understood.
     conversation_id: Optional[str] = None
     start_conversation: bool = False
+    # "hybrid" fuses passages with graph relationships. "vector" is passages
+    # only; "graph" is relationships only, which answers questions no single
+    # passage contains.
+    mode: Literal["hybrid", "vector", "graph"] = "hybrid"
 
 
 class PaperIdsRequest(BaseModel):
@@ -337,6 +341,8 @@ class AgentRunResponse(BaseModel):
     gaps: Optional[dict[str, Any]] = None
     graph: Optional[dict[str, Any]] = None
     retrieved: list[dict[str, Any]] = Field(default_factory=list)
+    graph_facts: list[dict[str, Any]] = Field(default_factory=list)
+    graph_matches: list[dict[str, Any]] = Field(default_factory=list)
     documents: list[dict[str, Any]] = Field(default_factory=list)
     trace: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)

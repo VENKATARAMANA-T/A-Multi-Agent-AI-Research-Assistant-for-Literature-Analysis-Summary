@@ -27,7 +27,7 @@ from app.agents.extraction import extract_node
 from app.agents.gap import gap_node
 from app.agents.graph_builder import build_graph_node
 from app.agents.qa import qa_node
-from app.agents.retrieval import load_documents_node, retrieve_node
+from app.agents.retrieval import graph_retrieve_node, load_documents_node, retrieve_node
 from app.agents.state import AgentState, Intent, new_state, trace_event
 from app.agents.summarization import multi_summarize_node, summarize_node
 
@@ -85,6 +85,7 @@ def build_workflow():
 
     graph.add_node("router", router_node)
     graph.add_node("retrieve", retrieve_node)
+    graph.add_node("graph_retrieve", graph_retrieve_node)
     graph.add_node("qa", qa_node)
     graph.add_node("load", load_documents_node)
     graph.add_node("summarize", summarize_node)
@@ -95,7 +96,11 @@ def build_workflow():
 
     graph.add_edge(START, "router")
     graph.add_conditional_edges("router", route_after_router, {"retrieve": "retrieve", "load": "load"})
-    graph.add_edge("retrieve", "qa")
+    # Vector retrieval then graph retrieval, in series: they write different
+    # keys and graph traversal is local, so there is nothing to gain from
+    # running them concurrently and a simpler graph to reason about.
+    graph.add_edge("retrieve", "graph_retrieve")
+    graph.add_edge("graph_retrieve", "qa")
     graph.add_edge("qa", END)
 
     graph.add_conditional_edges(
@@ -170,6 +175,8 @@ def run_workflow(
         "gaps": final.get("gaps"),
         "graph": final.get("graph"),
         "retrieved": final.get("retrieved") or [],
+        "graph_facts": final.get("graph_facts") or [],
+        "graph_matches": final.get("graph_matches") or [],
         "documents": [
             {"id": doc.get("id"), "title": doc.get("title"), "year": doc.get("year")}
             for doc in (final.get("documents") or [])
