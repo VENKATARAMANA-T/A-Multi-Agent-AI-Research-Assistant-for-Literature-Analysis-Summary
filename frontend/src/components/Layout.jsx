@@ -12,6 +12,7 @@ const NAV = [
   { to: '/matrix', label: 'Comparison', icon: '⊞' },
   { to: '/discover', label: 'Discover', icon: '✦' },
   { to: '/gaps', label: 'Research Gaps', icon: '◇' },
+  { to: '/hypotheses', label: 'Hypotheses', icon: '⌁' },
   { to: '/graph', label: 'Knowledge Graph', icon: '⁂' },
   { to: '/reports', label: 'Reports', icon: '▦' },
 ];

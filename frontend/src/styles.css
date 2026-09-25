@@ -891,6 +891,23 @@ code,
   border-color: var(--primary);
 }
 
+/* --- hypothesis chains ------------------------------------------------------ */
+
+.chain-paths {
+  font-size: 0.78rem;
+  margin: 0.4rem 0 0.6rem;
+}
+
+.chain-paths code {
+  background: var(--surface-alt);
+  border-radius: 3px;
+  padding: 0.05rem 0.3rem;
+}
+
+.chain-paths strong {
+  color: var(--accent, var(--primary));
+}
+
 /* --- discovery -------------------------------------------------------------- */
 
 .candidate-list {

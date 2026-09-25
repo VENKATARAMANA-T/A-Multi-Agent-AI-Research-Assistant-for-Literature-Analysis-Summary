@@ -96,6 +96,15 @@ export const api = {
   discoverSearch: (params) => request(`/api/discover/search${toQuery(params)}`),
   discoverGaps: (params) => request(`/api/discover/gaps${toQuery(params)}`),
 
+  // --- literature-based discovery -------------------------------------------
+  lbdTerms: (params) => request(`/api/lbd/terms${toQuery(params)}`),
+  runLbd: (payload) => request('/api/lbd', { method: 'POST', body: payload }),
+  runClosedLbd: (payload) => request('/api/lbd/closed', { method: 'POST', body: payload }),
+  listHypotheses: (params) => request(`/api/lbd/hypotheses${toQuery(params)}`),
+  starHypothesis: (id, starred) =>
+    request(`/api/lbd/hypotheses/${id}/star${toQuery({ starred })}`, { method: 'POST' }),
+  deleteHypothesis: (id) => request(`/api/lbd/hypotheses/${id}`, { method: 'DELETE' }),
+
   // --- conversations --------------------------------------------------------
   listConversations: () => request('/api/agents/conversations'),
   getConversation: (id) => request(`/api/agents/conversations/${id}`),
