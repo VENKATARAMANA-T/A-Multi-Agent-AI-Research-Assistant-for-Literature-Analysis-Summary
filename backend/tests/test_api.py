@@ -6,9 +6,10 @@ import io
 
 
 def upload(client, path, filename=None):
+    """Synchronous upload — `wait=true` returns the definitive per-file result."""
     with open(path, "rb") as handle:
         return client.post(
-            "/api/papers/upload",
+            "/api/papers/upload?wait=true",
             files=[("files", (filename or path.name, handle.read(), "application/pdf"))],
         )
 
@@ -54,7 +55,7 @@ def test_duplicate_upload_is_detected(client, sample_pdf):
 
 def test_non_pdf_upload_is_rejected(client):
     response = client.post(
-        "/api/papers/upload",
+        "/api/papers/upload?wait=true",
         files=[("files", ("notes.pdf", io.BytesIO(b"this is not a pdf"), "application/pdf"))],
     )
     payload = response.json()
