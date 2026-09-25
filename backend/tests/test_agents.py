@@ -34,7 +34,8 @@ def test_qa_intent_routes_through_retrieval(sample_pdf, fake_llm):
     result = run_workflow("qa", question="What ROUGE-L score does SparseSum reach?")
 
     nodes = [event["node"] for event in result["trace"]]
-    assert nodes[:3] == ["router", "retrieval", "qa"]
+    # Vector retrieval, then graph retrieval, then the answer.
+    assert nodes[:4] == ["router", "retrieval", "graph_retrieval", "qa"]
     assert "load" not in nodes
 
     assert result["status"] == "completed"

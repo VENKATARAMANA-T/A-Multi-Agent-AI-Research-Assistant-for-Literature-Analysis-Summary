@@ -259,6 +259,31 @@ costs nothing and works without a key.
 **Conversation memory.** Follow-up questions keep the earlier turns, so "why?" resolves against
 what was just asked. The replayed window is bounded because each turn costs prompt tokens.
 
+### Step 6b — GraphRAG
+Vector search finds passages that *resemble* the question. Some questions have no such
+passage: *"which methods were evaluated on the same dataset as wav2vec?"* is answered by the
+relationships between chunks, not by any one of them, and no amount of similarity search
+surfaces it.
+
+Those are answered by walking the graph instead. The question is linked to entities, the
+neighbourhood around them is collected, and the edges are serialised as facts the model reads
+and cites as `[G1]`, `[G2]` — each carrying the papers that assert it, so a graph-derived
+answer is as checkable as a text-derived one.
+
+Three modes: **hybrid** (default) fuses passages with relationships, **passages** is classic
+RAG, **relationships** uses the graph alone.
+
+**Entity linking is the whole game.** A wrongly linked entity produces confidently wrong
+context, so matching is deliberately conservative: exact surface forms first — including
+acronym expansions, so "CNN" reaches "Convolutional Neural Network (CNN)" — then embedding
+similarity only above a confidence floor. When nothing matches, graph retrieval returns
+nothing and the answer rests on the text alone. Inventing a subgraph would be worse than
+having none.
+
+Facts are de-duplicated through the same entity resolution as discovery below: without it the
+identical relationship appeared three times, once per spelling of the concept. Structural
+edges (`MENTIONS`, `AUTHORED_BY`) are excluded — they are bookkeeping, not findings.
+
 ### Step 7c — Literature-Based Discovery
 Connections the corpus implies but never states.
 
@@ -399,7 +424,7 @@ cd backend
 .venv\Scripts\python -m pytest
 ```
 
-334 tests, no network access required — the suite runs against an isolated temp directory with
+363 tests, no network access required — the suite runs against an isolated temp directory with
 the offline embedder, Neo4j disabled, and a mocked Gemini client.
 
 Coverage:
@@ -437,6 +462,9 @@ Coverage:
   marked "not reported" rather than guessed, and CSV export
 - **`test_discovery_and_memory.py`** — OpenAlex parsing and de-duplication (network stubbed),
   and that a follow-up question actually receives the earlier turns
+- **`test_graphrag.py`** — entity linking including acronyms, subgraph expansion, that a
+  question with no matching entity falls back to text rather than returning nothing, alias
+  de-duplication, and that graph context is scoped to the selected papers
 - **`test_lbd.py`** — reproduces Swanson's fish-oil/Raynaud's finding in miniature, and pins
   the rules that make it a discovery: an already-stated link is rejected, shared papers are not
   disjoint literatures, hub terms are discounted below specific ones, and an acronym merges

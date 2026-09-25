@@ -233,7 +233,7 @@ def test_resolution_can_be_switched_off():
         ],
         "edges": [],
     }
-    assert len(DiscoveryGraph(graph, resolve_entities=False).nodes) == 2
+    assert len(DiscoveryGraph(graph, merge_aliases=False).nodes) == 2
 
 
 # --- closed discovery --------------------------------------------------------
