@@ -5,12 +5,14 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlmodel import Session, select
 
-from app.database import get_session
+from app.database import get_session, session_scope
+from app.services import jobs
 from app.models import Chunk, Paper, PaperStatus
 from app.schemas import (
     PaperSummary,
@@ -29,14 +31,22 @@ router = APIRouter(prefix="/api/papers", tags=["papers"])
 MAX_FILES_PER_REQUEST = 20
 
 
-@router.post("/upload", response_model=UploadResponse, summary="Upload and index PDFs")
+@router.post("/upload", summary="Upload and index PDFs")
 async def upload_papers(
     files: list[UploadFile] = File(..., description="One or more PDF files"),
+    wait: bool = Query(
+        default=False,
+        description="Block until indexing finishes instead of returning a job to poll.",
+    ),
     session: Session = Depends(get_session),
-) -> UploadResponse:
+) -> Any:
     """Steps 1-5: store the PDF, extract text, chunk, embed and index it.
 
-    Ingestion runs synchronously so the client gets a definitive per-file result.
+    By default the work is queued and a job is returned immediately, because a
+    twenty-file upload otherwise holds the request open for minutes with no
+    feedback. Poll `/api/jobs/{id}` or subscribe to `/api/jobs/{id}/stream` for
+    per-file progress. Pass `wait=true` for the synchronous result instead,
+    which is convenient for scripting and tests.
     """
     if not files:
         raise HTTPException(status_code=400, detail="No files were provided.")
@@ -46,12 +56,31 @@ async def upload_papers(
             detail=f"Upload at most {MAX_FILES_PER_REQUEST} files per request.",
         )
 
+    # Read the uploads here either way: the request body is gone once this
+    # handler returns, so a background worker cannot stream from it.
+    payloads: list[tuple[str, bytes]] = []
+    for upload in files:
+        payloads.append((upload.filename or "paper.pdf", await upload.read()))
+        await upload.close()
+
+    if not wait:
+        job = jobs.create_job(
+            "ingest",
+            [name for name, _ in payloads],
+            message=f"Indexing {len(payloads)} file(s)",
+        )
+        jobs.submit(job.id, lambda job_id: _ingest_in_background(job_id, payloads))
+        return JSONResponse(status_code=202, content=job.to_dict())
+
+    return _ingest_sync(session, payloads)
+
+
+def _ingest_sync(session: Session, payloads: list[tuple[str, bytes]]) -> UploadResponse:
+    """Run the pipeline inline and return a definitive per-file result."""
     results: list[UploadResultItem] = []
 
-    for upload in files:
-        filename = upload.filename or "paper.pdf"
+    for filename, data in payloads:
         try:
-            data = await upload.read()
             paper, created = store_upload(session, filename, data)
 
             if not created and paper.status == PaperStatus.INDEXED:
@@ -81,8 +110,6 @@ async def upload_papers(
         except Exception as exc:  # pragma: no cover - unexpected
             logger.exception("Upload failed for %s", filename)
             results.append(UploadResultItem(filename=filename, status="failed", detail=str(exc)))
-        finally:
-            await upload.close()
 
     return UploadResponse(
         uploaded=len(results),
@@ -91,6 +118,46 @@ async def upload_papers(
         failed=sum(1 for r in results if r.status == "failed"),
         results=results,
     )
+
+
+def _ingest_in_background(job_id: str, payloads: list[tuple[str, bytes]]) -> None:
+    """Worker body: index each file, reporting progress as it goes.
+
+    Runs off the request thread, so it opens its own database session.
+    """
+    for index, (filename, data) in enumerate(payloads):
+        try:
+            jobs.update_item(job_id, index, state="running", stage="storing")
+            with session_scope() as session:
+                paper, created = store_upload(session, filename, data)
+                paper_id = paper.id
+
+                if not created and paper.status == PaperStatus.INDEXED:
+                    jobs.record_result(
+                        job_id,
+                        index,
+                        ok=True,
+                        state="duplicate",
+                        detail="This PDF is already indexed.",
+                        paper_id=paper_id,
+                    )
+                    continue
+
+                jobs.update_item(job_id, index, stage="extracting", paper_id=paper_id)
+                paper = process_paper(session, paper_id)
+                jobs.record_result(
+                    job_id,
+                    index,
+                    ok=True,
+                    state="indexed",
+                    detail=f"Indexed {paper.chunk_count} chunks from {paper.page_count} pages.",
+                    paper_id=paper_id,
+                )
+        except IngestionError as exc:
+            jobs.record_result(job_id, index, ok=False, state="failed", detail=str(exc))
+        except Exception as exc:  # pragma: no cover - unexpected
+            logger.exception("Background ingestion failed for %s", filename)
+            jobs.record_result(job_id, index, ok=False, state="failed", detail=str(exc))
 
 
 @router.get("", response_model=list[PaperSummary], summary="List papers")

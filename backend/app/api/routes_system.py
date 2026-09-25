@@ -13,6 +13,7 @@ from app.config import settings
 from app.database import get_session
 from app.models import AgentRun, Chunk, Paper, PaperStatus, Report
 from app.schemas import HealthResponse, StatsResponse
+from app.services import llm_cache, ocr, ocr_cache
 from app.services.embeddings import get_embedder
 from app.services.graph_store import get_graph_store
 from app.services.llm import get_llm
@@ -51,7 +52,10 @@ def health(session: Session = Depends(get_session)) -> HealthResponse:
     except Exception as exc:  # pragma: no cover
         graph = {"backend": "unavailable", "error": str(exc)}
 
-    counts = Counter(paper.status for paper in session.exec(select(Paper)).all())
+    ocr_state = {**ocr.engine_status(), "cache": ocr_cache.summary()}
+
+    papers = list(session.exec(select(Paper)).all())
+    counts = Counter(paper.status for paper in papers)
 
     return HealthResponse(
         status="ok",
@@ -61,17 +65,32 @@ def health(session: Session = Depends(get_session)) -> HealthResponse:
             "provider": "google-gemini",
             "model": llm.model,
             "configured": llm.available,
+            "max_concurrency": settings.llm_max_concurrency,
+            "cache": llm_cache.summary(),
             "note": None if llm.available else "Set GOOGLE_API_KEY in backend/.env to enable the agents.",
         },
         embeddings=embeddings,
         vector_store=vector_store,
         graph=graph,
+        ocr=ocr_state,
         papers={
             "total": sum(counts.values()),
             "indexed": counts.get(PaperStatus.INDEXED, 0),
             "failed": counts.get(PaperStatus.FAILED, 0),
+            "ocr_assisted": sum(1 for paper in papers if (paper.text_source or "native") != "native"),
         },
     )
+
+
+@router.get("/cache", summary="LLM cache statistics")
+def cache_stats() -> dict:
+    return llm_cache.summary()
+
+
+@router.delete("/cache", status_code=200, summary="Clear the LLM cache")
+def clear_cache() -> dict:
+    removed = llm_cache.clear()
+    return {"removed": removed}
 
 
 @router.get("/stats", response_model=StatsResponse, summary="Corpus statistics")

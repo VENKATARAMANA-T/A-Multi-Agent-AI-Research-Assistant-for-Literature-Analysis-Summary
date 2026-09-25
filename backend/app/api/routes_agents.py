@@ -4,12 +4,21 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlmodel import Session, select
 
 from app.agents.workflow import run_workflow
+from app.config import settings
 from app.database import get_session
-from app.models import AgentRun, ExtractionRecord, Paper, PaperStatus, SummaryRecord
+from app.models import (
+    AgentRun,
+    Conversation,
+    ExtractionRecord,
+    Paper,
+    PaperStatus,
+    SummaryRecord,
+    utcnow,
+)
 from app.schemas import (
     AgentRunResponse,
     AskRequest,
@@ -52,13 +61,115 @@ def _validate_papers(session: Session, paper_ids: list[str], minimum: int = 1) -
 @router.post("/ask", response_model=AgentRunResponse, summary="Question Answering Agent (RAG)")
 def ask(payload: AskRequest, session: Session = Depends(get_session)) -> AgentRunResponse:
     paper_ids = _validate_papers(session, payload.paper_ids)
+
+    # A follow-up like "why?" needs the earlier turns to resolve against.
+    conversation = None
+    history: list[dict] = []
+    if payload.conversation_id:
+        conversation = session.get(Conversation, payload.conversation_id)
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        turns = settings.conversation_memory_turns * 2
+        history = [
+            {"role": message.get("role"), "content": message.get("content")}
+            for message in (conversation.messages or [])[-turns:]
+        ]
+
     result = run_workflow(
         "qa",
         question=payload.question,
         paper_ids=paper_ids,
         top_k=payload.top_k,
+        history=history,
     )
+
+    if payload.conversation_id or payload.start_conversation:
+        conversation = _append_turn(session, conversation, paper_ids, payload.question, result)
+        result["conversation_id"] = conversation.id
+
     return AgentRunResponse(**result)
+
+
+def _append_turn(
+    session: Session,
+    conversation: Conversation | None,
+    paper_ids: list[str],
+    question: str,
+    result: dict,
+) -> Conversation:
+    """Record the exchange so the next question can refer back to it."""
+    answer = result.get("answer") or {}
+
+    if conversation is None:
+        conversation = Conversation(
+            title=question[:120],
+            paper_ids=paper_ids,
+            messages=[],
+        )
+
+    messages = list(conversation.messages or [])
+    messages.append({"role": "user", "content": question, "at": utcnow().isoformat()})
+    messages.append(
+        {
+            "role": "assistant",
+            "content": answer.get("answer") or "",
+            "sources": answer.get("sources") or [],
+            "confidence": answer.get("confidence"),
+            "at": utcnow().isoformat(),
+        }
+    )
+    conversation.messages = messages
+    conversation.updated_at = utcnow()
+
+    session.add(conversation)
+    session.commit()
+    session.refresh(conversation)
+    return conversation
+
+
+@router.get("/conversations", summary="List conversations")
+def list_conversations(
+    limit: int = Query(default=25, ge=1, le=200),
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    rows = session.exec(
+        select(Conversation).order_by(Conversation.updated_at.desc()).limit(limit)  # type: ignore[attr-defined]
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "title": row.title,
+            "paper_ids": row.paper_ids,
+            "turns": row.turn_count,
+            "updated_at": row.updated_at,
+        }
+        for row in rows
+    ]
+
+
+@router.get("/conversations/{conversation_id}", summary="Get a conversation")
+def get_conversation(conversation_id: str, session: Session = Depends(get_session)) -> dict:
+    conversation = session.get(Conversation, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return {
+        "id": conversation.id,
+        "title": conversation.title,
+        "paper_ids": conversation.paper_ids,
+        "messages": conversation.messages or [],
+        "turns": conversation.turn_count,
+        "updated_at": conversation.updated_at,
+    }
+
+
+@router.delete("/conversations/{conversation_id}", status_code=204, summary="Delete a conversation")
+def delete_conversation(conversation_id: str, session: Session = Depends(get_session)) -> Response:
+    conversation = session.get(Conversation, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    session.delete(conversation)
+    session.commit()
+    return Response(status_code=204)
 
 
 @router.post("/summarize", response_model=AgentRunResponse, summary="Summarization Agent")

@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
@@ -55,15 +56,45 @@ async def lifespan(app: FastAPI):
             "will return an 'LLM unavailable' error until you configure a key."
         )
 
-    # Warm the vector store so the first upload is not slowed by client startup.
+    # A job left RUNNING belongs to a process that no longer exists.
+    from app.services import jobs
+
+    reclaimed = jobs.reclaim_stale_jobs()
+    if reclaimed:
+        logger.info("Marked %d interrupted job(s) as failed", reclaimed)
+
+    # Warm the vector store *and* the embedding model. Loading the model lazily
+    # meant the first upload of every session paid a multi-second penalty that
+    # looked like slow ingestion.
     try:
+        from app.services.embeddings import get_embedder
         from app.services.vector_store import get_vector_store
 
-        logger.info("Vector store ready with %d vectors", get_vector_store().count())
+        started = time.perf_counter()
+        embedder = get_embedder()
+        get_vector_store()
+        logger.info(
+            "Warm start: embedder=%s (dim %d), vectors=%d, %.1fs",
+            embedder.name,
+            embedder.dimension,
+            get_vector_store().count(),
+            time.perf_counter() - started,
+        )
     except Exception:
-        logger.warning("Vector store could not be initialised at startup", exc_info=True)
+        logger.warning("Warm start failed; falling back to lazy loading", exc_info=True)
+
+    try:
+        from app.services import llm_cache
+
+        purged = llm_cache.purge_expired()
+        if purged:
+            logger.info("Purged %d expired LLM cache entries", purged)
+    except Exception:
+        logger.warning("Could not purge the LLM cache", exc_info=True)
 
     yield
+
+    jobs.shutdown()
     logger.info("ResearchCompass shutting down")
 
 
@@ -83,6 +114,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Agent payloads carry full chunk text and long reports; compressing them cuts
+# transfer time noticeably. The minimum size keeps small JSON uncompressed.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 @app.middleware("http")
