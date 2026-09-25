@@ -14,6 +14,7 @@ from app.api import (
     routes_reader,
     routes_reports,
     routes_system,
+    routes_verify,
 )
 
 api_router = APIRouter()
@@ -28,5 +29,6 @@ api_router.include_router(routes_reader.router)
 api_router.include_router(routes_matrix.router)
 api_router.include_router(routes_discovery.router)
 api_router.include_router(routes_lbd.router)
+api_router.include_router(routes_verify.router)
 
 __all__ = ["api_router"]
