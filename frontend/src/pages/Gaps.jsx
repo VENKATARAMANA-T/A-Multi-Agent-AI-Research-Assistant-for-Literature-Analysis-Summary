@@ -2,6 +2,7 @@ import { useState } from 'react';
 import api from '../api/client';
 import AgentTrace from '../components/AgentTrace';
 import PaperPicker from '../components/PaperPicker';
+import VerificationBadge from '../components/VerificationBadge';
 import { Badge, BulletList, Card, ErrorBanner, Spinner, WarningBanner, statusTone } from '../components/common';
 import { useCorpus } from '../context/CorpusContext';
 
@@ -120,6 +121,19 @@ export default function Gaps() {
                   <BulletList items={gaps.open_questions} />
                 </Card>
               </div>
+
+              <Card
+                title="Fact check"
+                subtitle="A gap only matters if the literature really is silent — this checks that"
+              >
+                <VerificationBadge
+                  runId={result.run_id}
+                  paperIds={result.paper_ids}
+                  source="gap"
+                  subject={focus.trim() || 'Research gaps'}
+                  label="Verify these gaps"
+                />
+              </Card>
 
               <AgentTrace
                 trace={result.trace}

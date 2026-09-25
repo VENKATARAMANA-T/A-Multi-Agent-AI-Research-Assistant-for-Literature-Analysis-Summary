@@ -1645,3 +1645,84 @@ code,
   padding-left: 0.8rem;
   color: var(--text-muted);
 }
+
+/* --- verification ---------------------------------------------------------- */
+
+.verification {
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+}
+
+.verification-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.claim-list {
+  list-style: none;
+  margin: 0.9rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.claim {
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface-alt);
+}
+
+.claim-success { border-left-color: var(--success); }
+.claim-warning { border-left-color: var(--warning); }
+.claim-danger { border-left-color: var(--danger); }
+.claim-neutral { border-left-color: var(--border); }
+
+.claim-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.claim-text {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.claim-why {
+  margin: 0.3rem 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.claim-quote {
+  margin: 0.45rem 0 0;
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--border);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.claim-evidence {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.claim-evidence summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.claim-evidence ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1rem;
+}
+
+.claim-evidence p {
+  margin: 0.2rem 0 0.6rem;
+}
