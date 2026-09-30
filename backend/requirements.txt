@@ -17,7 +17,11 @@ PyMuPDF==1.25.1
 # Tesseract which would require a separate installer on every machine and in
 # the image. It pulls opencv-python, which needs libgl1 (see the Dockerfile).
 rapidocr-onnxruntime==1.2.3
-pillow==11.1.0
+# Held below 11 because fastembed (below) requires <11.0.0. Nothing here needs
+# Pillow 11 — only `Image.open` on a rendered page — so the optional faster
+# embedder wins the tie. Pinning 11 makes the image unbuildable, which the
+# local virtualenv never showed because fastembed was never installed there.
+pillow==10.4.0
 
 # --- Chunking ----------------------------------------------------------------
 langchain-text-splitters==0.3.4

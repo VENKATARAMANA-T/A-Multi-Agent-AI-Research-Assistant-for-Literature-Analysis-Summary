@@ -15,7 +15,15 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# Install CPU-only torch *first*, from PyTorch's CPU index. Left to resolve on
+# its own, sentence-transformers pulls the default torch wheel, which drags in
+# the whole CUDA 13 stack — cuDNN alone is 553 MB — for a container that has no
+# GPU and runs the embedder on CPU. It adds gigabytes to the image and makes
+# the build fail on a slow connection, which is how it was found.
+RUN pip install --upgrade pip \
+    && pip install --index-url https://download.pytorch.org/whl/cpu torch \
+    && pip install -r requirements.txt
 
 COPY app ./app
 
