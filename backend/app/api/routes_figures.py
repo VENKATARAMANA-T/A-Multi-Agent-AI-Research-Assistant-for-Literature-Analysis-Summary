@@ -10,9 +10,10 @@ from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 
 from app.agents.figure import analyse_many
+from app.api.deps import current_user, owned_paper, owned_paper_ids
 from app.config import settings
 from app.database import get_session
-from app.models import AgentRun, Figure, FigureStatus, Paper, PaperStatus
+from app.models import AgentRun, Figure, FigureStatus, Paper, PaperStatus, User
 from app.schemas import (
     FigureAnalysisRequest,
     FigureAnalysisResponse,
@@ -25,17 +26,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/figures", tags=["figures"])
 
 
-def _resolve_papers(session: Session, paper_ids: list[str]) -> list[str]:
-    if paper_ids:
-        found = list(session.exec(select(Paper).where(Paper.id.in_(paper_ids))).all())  # type: ignore[attr-defined]
-        missing = set(paper_ids) - {paper.id for paper in found}
-        if missing:
-            raise HTTPException(status_code=404, detail=f"Unknown paper id(s): {', '.join(sorted(missing))}")
-        return [paper.id for paper in found]
-    return [
-        paper.id
-        for paper in session.exec(select(Paper).where(Paper.status == PaperStatus.INDEXED)).all()
-    ]
+def _resolve_papers(session: Session, user: User, paper_ids: list[str]) -> list[str]:
+    return owned_paper_ids(session, user, paper_ids)
 
 
 @router.get("", response_model=list[FigureSummary], summary="List extracted figures")
@@ -44,10 +36,15 @@ def list_figures(
     kind: str | None = Query(default=None, description="figure | table | chart | algorithm"),
     status: FigureStatus | None = Query(default=None),
     session: Session = Depends(get_session),
+    user: User = Depends(current_user),
 ) -> list[FigureSummary]:
-    statement = select(Figure)
-    if paper_ids:
-        statement = statement.where(Figure.paper_id.in_(paper_ids))  # type: ignore[attr-defined]
+    # Scoped to this account's papers even when no filter is given, so an
+    # unfiltered list cannot reach across accounts.
+    scope = owned_paper_ids(session, user, paper_ids or None)
+    if not scope:
+        return []
+
+    statement = select(Figure).where(Figure.paper_id.in_(scope))  # type: ignore[attr-defined]
     if kind:
         statement = statement.where(Figure.kind == kind)
     if status:
@@ -55,7 +52,8 @@ def list_figures(
 
     rows = list(session.exec(statement).all())
     titles = {
-        paper.id: paper.title for paper in session.exec(select(Paper)).all()
+        paper.id: paper.title
+        for paper in session.exec(select(Paper).where(Paper.owner_id == user.id)).all()
     }
     rows.sort(key=lambda f: (titles.get(f.paper_id) or "", f.page, f.label))
     return [FigureSummary.from_model(row, titles.get(row.paper_id)) for row in rows]
@@ -65,13 +63,14 @@ def list_figures(
 def estimate(
     paper_ids: list[str] | None = Query(default=None),
     session: Session = Depends(get_session),
+    user: User = Depends(current_user),
 ) -> FigureCostEstimate:
     """How many vision requests a full analysis would spend.
 
     Shown before the action because on the free tier this is the difference
     between a working day and an exhausted quota.
     """
-    resolved = _resolve_papers(session, paper_ids or [])
+    resolved = _resolve_papers(session, user, paper_ids or [])
     outstanding = pending_figures(session, resolved)
     tables_free = list(
         session.exec(
@@ -95,9 +94,10 @@ def estimate(
 def analyse(
     payload: FigureAnalysisRequest,
     session: Session = Depends(get_session),
+    user: User = Depends(current_user),
 ) -> FigureAnalysisResponse:
     """Run the Figure Agent over pending figures. One request per figure."""
-    resolved = _resolve_papers(session, payload.paper_ids)
+    resolved = _resolve_papers(session, user, payload.paper_ids)
     outstanding = pending_figures(session, resolved)
 
     if payload.figure_ids:
@@ -114,7 +114,10 @@ def analyse(
             detail="Nothing to analyse — every figure is already read or has no image.",
         )
 
-    titles = {paper.id: paper.title for paper in session.exec(select(Paper)).all()}
+    titles = {
+        paper.id: paper.title
+        for paper in session.exec(select(Paper).where(Paper.owner_id == user.id)).all()
+    }
     items = []
     for figure in selected:
         items.append(
@@ -148,6 +151,7 @@ def analyse(
             result={"analysed": analysed},
             error="; ".join(delta.get("errors") or []) or None,
             duration_ms=duration,
+            owner_id=user.id,
         )
     )
     session.commit()
@@ -164,19 +168,28 @@ def analyse(
 
 
 @router.get("/{figure_id}", response_model=FigureSummary, summary="Get one figure")
-def get_figure(figure_id: str, session: Session = Depends(get_session)) -> FigureSummary:
+def get_figure(
+    figure_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> FigureSummary:
     figure = session.get(Figure, figure_id)
     if figure is None:
         raise HTTPException(status_code=404, detail="Figure not found.")
-    paper = session.get(Paper, figure.paper_id)
-    return FigureSummary.from_model(figure, paper.title if paper else None)
+    paper = owned_paper(session, user, figure.paper_id)
+    return FigureSummary.from_model(figure, paper.title)
 
 
 @router.get("/{figure_id}/image", summary="The rendered figure image")
-def get_image(figure_id: str, session: Session = Depends(get_session)) -> Response:
+def get_image(
+    figure_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> Response:
     figure = session.get(Figure, figure_id)
     if figure is None:
         raise HTTPException(status_code=404, detail="Figure not found.")
+    owned_paper(session, user, figure.paper_id)
     if not figure.image_path or not Path(figure.image_path).exists():
         raise HTTPException(status_code=404, detail="No image was rendered for this figure.")
     return FileResponse(

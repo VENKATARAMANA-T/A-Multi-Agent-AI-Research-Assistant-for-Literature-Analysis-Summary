@@ -56,6 +56,20 @@ async def lifespan(app: FastAPI):
             "will return an 'LLM unavailable' error until you configure a key."
         )
 
+    # Ownership arrived after the data did: rows created before accounts
+    # existed have no owner, and a NULL owner matches nobody's query, so the
+    # corpus would disappear from the UI without this.
+    try:
+        from app.database import session_scope
+        from app.services import bootstrap
+
+        with session_scope() as session:
+            adopted = bootstrap.run(session)
+        if adopted:
+            logger.info("Adopted pre-existing data: %s", adopted)
+    except Exception:  # pragma: no cover - never block startup on bookkeeping
+        logger.exception("Could not run the ownership bootstrap")
+
     # A job left RUNNING belongs to a process that no longer exists.
     from app.services import jobs
 

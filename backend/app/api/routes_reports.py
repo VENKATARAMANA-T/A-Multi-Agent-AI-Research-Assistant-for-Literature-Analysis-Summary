@@ -11,8 +11,9 @@ from sqlmodel import Session, desc, select
 
 from app.agents.state import condense_paper_text, format_paper_context
 from app.agents.workflow import run_workflow
+from app.api.deps import current_user, owned_paper_ids
 from app.database import get_session
-from app.models import Paper, PaperStatus, Report
+from app.models import Paper, PaperStatus, Report, User
 from app.schemas import ReportDetail, ReportRequest, ReportSummary
 from app.services.graph_store import get_graph_store
 from app.services.report import (
@@ -27,9 +28,15 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 
 @router.post("", response_model=ReportDetail, summary="Generate a literature review report")
-def create_report(payload: ReportRequest, session: Session = Depends(get_session)) -> ReportDetail:
+def create_report(
+    payload: ReportRequest,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> ReportDetail:
     """Runs the full review pipeline, then renders Markdown + PDF."""
-    statement = select(Paper).where(Paper.status == PaperStatus.INDEXED)
+    statement = select(Paper).where(
+        Paper.status == PaperStatus.INDEXED, Paper.owner_id == user.id
+    )
     if payload.paper_ids:
         statement = statement.where(Paper.id.in_(payload.paper_ids))  # type: ignore[attr-defined]
     papers = list(session.exec(statement).all())
@@ -97,6 +104,7 @@ def create_report(payload: ReportRequest, session: Session = Depends(get_session
     )
 
     report = Report(
+        owner_id=user.id,
         title=title,
         kind="literature_review",
         paper_ids=paper_ids,
@@ -124,8 +132,14 @@ def create_report(payload: ReportRequest, session: Session = Depends(get_session
 def list_reports(
     limit: int = Query(default=50, ge=1, le=200),
     session: Session = Depends(get_session),
+    user: User = Depends(current_user),
 ) -> list[ReportSummary]:
-    reports = session.exec(select(Report).order_by(desc(Report.created_at)).limit(limit)).all()
+    reports = session.exec(
+        select(Report)
+        .where(Report.owner_id == user.id)
+        .order_by(desc(Report.created_at))
+        .limit(limit)
+    ).all()
     return [
         ReportSummary(
             id=report.id,
@@ -142,17 +156,25 @@ def list_reports(
 
 
 @router.get("/{report_id}", response_model=ReportDetail, summary="Get a report")
-def get_report(report_id: str, session: Session = Depends(get_session)) -> ReportDetail:
+def get_report(
+    report_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> ReportDetail:
     report = session.get(Report, report_id)
-    if report is None:
+    if report is None or report.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Report not found.")
     return _detail(report)
 
 
 @router.get("/{report_id}/markdown", response_class=PlainTextResponse, summary="Download Markdown")
-def get_report_markdown(report_id: str, session: Session = Depends(get_session)) -> PlainTextResponse:
+def get_report_markdown(
+    report_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> PlainTextResponse:
     report = session.get(Report, report_id)
-    if report is None:
+    if report is None or report.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Report not found.")
     filename = f"{report.title[:60].replace(' ', '_')}.md"
     return PlainTextResponse(
@@ -163,9 +185,13 @@ def get_report_markdown(report_id: str, session: Session = Depends(get_session))
 
 
 @router.get("/{report_id}/pdf", summary="Download PDF")
-def get_report_pdf(report_id: str, session: Session = Depends(get_session)) -> FileResponse:
+def get_report_pdf(
+    report_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> FileResponse:
     report = session.get(Report, report_id)
-    if report is None:
+    if report is None or report.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Report not found.")
 
     path = Path(report.pdf_path) if report.pdf_path else report_path(report.id)
@@ -186,9 +212,13 @@ def get_report_pdf(report_id: str, session: Session = Depends(get_session)) -> F
 
 
 @router.delete("/{report_id}", status_code=204, response_class=Response, summary="Delete a report")
-def delete_report(report_id: str, session: Session = Depends(get_session)) -> Response:
+def delete_report(
+    report_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> Response:
     report = session.get(Report, report_id)
-    if report is None:
+    if report is None or report.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Report not found.")
     if report.pdf_path:
         Path(report.pdf_path).unlink(missing_ok=True)

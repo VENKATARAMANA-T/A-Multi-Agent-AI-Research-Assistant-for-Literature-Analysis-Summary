@@ -1,24 +1,31 @@
 import { NavLink, Outlet } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import { useCorpus } from '../context/CorpusContext';
 
 const NAV = [
-  { to: '/', label: 'Dashboard', icon: '◎', end: true },
-  { to: '/upload', label: 'Upload', icon: '↑' },
-  { to: '/library', label: 'Library', icon: '▤' },
-  { to: '/ask', label: 'Ask (RAG)', icon: '?' },
-  { to: '/summaries', label: 'Summaries', icon: '≡' },
-  { to: '/extraction', label: 'Extraction', icon: '⌗' },
-  { to: '/figures', label: 'Figures', icon: '▩' },
-  { to: '/matrix', label: 'Comparison', icon: '⊞' },
-  { to: '/discover', label: 'Discover', icon: '✦' },
-  { to: '/gaps', label: 'Research Gaps', icon: '◇' },
-  { to: '/hypotheses', label: 'Hypotheses', icon: '⌁' },
-  { to: '/graph', label: 'Knowledge Graph', icon: '⁂' },
-  { to: '/reports', label: 'Reports', icon: '▦' },
+  { to: '/app', label: 'Dashboard', icon: '◎', end: true },
+  { to: '/app/upload', label: 'Upload', icon: '↑' },
+  { to: '/app/library', label: 'Library', icon: '▤' },
+  { to: '/app/ask', label: 'Ask (RAG)', icon: '?' },
+  { to: '/app/summaries', label: 'Summaries', icon: '≡' },
+  { to: '/app/extraction', label: 'Extraction', icon: '⌗' },
+  { to: '/app/figures', label: 'Figures', icon: '▩' },
+  { to: '/app/matrix', label: 'Comparison', icon: '⊞' },
+  { to: '/app/discover', label: 'Discover', icon: '✦' },
+  { to: '/app/gaps', label: 'Research Gaps', icon: '◇' },
+  { to: '/app/hypotheses', label: 'Hypotheses', icon: '⌁' },
+  { to: '/app/graph', label: 'Knowledge Graph', icon: '⁂' },
+  { to: '/app/reports', label: 'Reports', icon: '▦' },
 ];
+
+function initials(user) {
+  const letters = `${user.first_name?.[0] || ''}${user.last_name?.[0] || ''}`.trim();
+  return (letters || user.username.slice(0, 2)).toUpperCase();
+}
 
 export default function Layout() {
   const { health, indexedPapers, llmReady } = useCorpus();
+  const { user, signOut } = useAuth();
 
   return (
     <div className="app-shell">
@@ -64,6 +71,32 @@ export default function Layout() {
             )}
           </div>
         </div>
+
+        {user && (
+          <div className="sidebar-profile">
+            <NavLink
+              to="/app/profile"
+              className={({ isActive }) => `profile-link ${isActive ? 'is-active' : ''}`}
+            >
+              <span className="avatar" aria-hidden="true">
+                {initials(user)}
+              </span>
+              <span className="profile-text">
+                <span className="profile-name">{user.full_name}</span>
+                <span className="profile-sub">{user.email}</span>
+              </span>
+            </NavLink>
+            <button
+              type="button"
+              className="profile-signout"
+              onClick={signOut}
+              title="Sign out"
+              aria-label="Sign out"
+            >
+              ⏻
+            </button>
+          </div>
+        )}
       </aside>
 
       <main className="main">

@@ -130,7 +130,7 @@ export default function Library() {
               actions={
                 <div className="row-actions">
                   <Badge tone={statusTone(paper.status)}>{paper.status}</Badge>
-                  <Link className="btn btn-ghost btn-sm" to={`/reader/${paper.id}`}>
+                  <Link className="btn btn-ghost btn-sm" to={`/app/reader/${paper.id}`}>
                     Read
                   </Link>
                   <a

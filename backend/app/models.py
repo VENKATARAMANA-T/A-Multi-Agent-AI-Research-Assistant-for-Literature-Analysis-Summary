@@ -20,6 +20,39 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class User(SQLModel, table=True):
+    """An account. Everything a person uploads or generates hangs off one.
+
+    `username` and `email` are both unique and both usable to sign in, so the
+    lookup is by either; they are stored lowercased for that reason — otherwise
+    "User1" and "user1" would be two accounts and sign-in would depend on how
+    the name happened to be typed.
+    """
+
+    __tablename__ = "users"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    username: str = Field(index=True, unique=True)
+    email: str = Field(index=True, unique=True)
+    first_name: str = ""
+    last_name: str = ""
+
+    password_hash: str = ""
+
+    # An account exists before it is usable: registration creates it, the
+    # emailed link activates it. Signing in before that is refused with a
+    # reason, not a generic failure.
+    is_active: bool = Field(default=False, index=True)
+    activated_at: Optional[datetime] = None
+
+    created_at: datetime = Field(default_factory=utcnow)
+    last_login_at: Optional[datetime] = None
+
+    @property
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}".strip() or self.username
+
+
 class PaperStatus(str, Enum):
     UPLOADED = "uploaded"
     EXTRACTING = "extracting"
@@ -33,6 +66,9 @@ class Paper(SQLModel, table=True):
     __tablename__ = "papers"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
+    # Nullable so the column can be added to an existing database; every row
+    # is backfilled to the first account at startup and set on creation after.
+    owner_id: Optional[str] = Field(default=None, index=True, foreign_key="users.id")
     filename: str
     file_path: str
     content_hash: str = Field(index=True)
@@ -177,6 +213,9 @@ class Conversation(SQLModel, table=True):
     __tablename__ = "conversations"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
+    # Nullable so the column can be added to an existing database; every row
+    # is backfilled to the first account at startup and set on creation after.
+    owner_id: Optional[str] = Field(default=None, index=True, foreign_key="users.id")
     title: str = ""
     paper_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     # [{role: "user"|"assistant", content: str, sources: [...], at: iso}]
@@ -199,6 +238,9 @@ class Hypothesis(SQLModel, table=True):
     __tablename__ = "hypotheses"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
+    # Nullable so the column can be added to an existing database; every row
+    # is backfilled to the first account at startup and set on creation after.
+    owner_id: Optional[str] = Field(default=None, index=True, foreign_key="users.id")
 
     source_term: str = ""
     target_term: str = ""
@@ -230,6 +272,9 @@ class MatrixRun(SQLModel, table=True):
     __tablename__ = "matrix_runs"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
+    # Nullable so the column can be added to an existing database; every row
+    # is backfilled to the first account at startup and set on creation after.
+    owner_id: Optional[str] = Field(default=None, index=True, foreign_key="users.id")
     name: str = ""
     paper_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     columns: list[Any] = Field(default_factory=list, sa_column=Column(JSON))
@@ -246,6 +291,9 @@ class AgentRun(SQLModel, table=True):
     __tablename__ = "agent_runs"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
+    # Nullable so the column can be added to an existing database; every row
+    # is backfilled to the first account at startup and set on creation after.
+    owner_id: Optional[str] = Field(default=None, index=True, foreign_key="users.id")
     intent: str = Field(index=True)
     question: Optional[str] = Field(default=None, sa_column=Column(Text))
     paper_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
@@ -267,6 +315,9 @@ class VerificationRecord(SQLModel, table=True):
     __tablename__ = "verifications"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
+    # Nullable so the column can be added to an existing database; every row
+    # is backfilled to the first account at startup and set on creation after.
+    owner_id: Optional[str] = Field(default=None, index=True, foreign_key="users.id")
 
     # What was checked. `agent_run_id` is set when the text came from a stored
     # run, which is what links a verdict back to the agent that earned it.
@@ -292,6 +343,9 @@ class Report(SQLModel, table=True):
     __tablename__ = "reports"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
+    # Nullable so the column can be added to an existing database; every row
+    # is backfilled to the first account at startup and set on creation after.
+    owner_id: Optional[str] = Field(default=None, index=True, foreign_key="users.id")
     title: str
     kind: str = "literature_review"
     paper_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))

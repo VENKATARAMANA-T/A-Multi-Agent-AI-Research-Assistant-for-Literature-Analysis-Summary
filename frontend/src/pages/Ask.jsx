@@ -164,7 +164,7 @@ export default function Ask() {
                               <Link
                                 className="btn btn-ghost btn-sm"
                                 to={
-                                  `/reader/${source.paper_id}?` +
+                                  `/app/reader/${source.paper_id}?` +
                                   (source.kind === 'figure' && source.figure_id
                                     ? `figure=${source.figure_id}`
                                     : `chunk=${source.chunk_id}`)

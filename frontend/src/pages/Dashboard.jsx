@@ -53,7 +53,7 @@ export default function Dashboard() {
             Corpus overview, pipeline status, and recent multi-agent activity.
           </p>
         </div>
-        <Link className="btn btn-primary" to="/upload">
+        <Link className="btn btn-primary" to="/app/upload">
           Upload papers
         </Link>
       </header>
@@ -161,7 +161,7 @@ export default function Dashboard() {
             <Card title="Get started">
               <p>
                 Upload three to five related papers, then run the{' '}
-                <Link to="/gaps">Research Gap agent</Link> to see where the literature stops.
+                <Link to="/app/gaps">Research Gap agent</Link> to see where the literature stops.
               </p>
             </Card>
           )}

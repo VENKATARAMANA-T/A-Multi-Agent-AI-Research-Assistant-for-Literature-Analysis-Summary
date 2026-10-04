@@ -341,6 +341,32 @@ stays affordable on a free-tier key. It is opt-in, with the cost shown on the bu
 > A claim that is true in general but absent from these papers is reported as unsupported.
 > That is deliberate: the question is whether *this corpus* backs the sentence.
 
+### Accounts
+Everything belongs to somebody. Papers, runs, reports, hypotheses and
+verifications all carry an owner, and every query is scoped at the `WHERE`
+clause rather than filtered afterwards — a corpus-wide default that forgets the
+owner is exactly where a multi-user bug hides, because it reads naturally and
+passes every single-user test.
+
+Sign-in takes a username **or** an email. A wrong password and an unknown
+account answer identically, so the form cannot be used to discover who is
+registered; an unactivated account is the one exception, because that person
+already proved they know the password.
+
+Registration emails a link that expires in five minutes. Activation and access
+tokens are both JWTs signed with the same key and told apart by a `purpose`
+claim — without it, a link sitting in an inbox would be a working session.
+
+Passwords are bcrypt-hashed. Only length and stray whitespace are *refused*:
+composition rules ("must contain a digit and a symbol") are what NIST SP 800-63B
+advises against, since they push people towards `Password1!` and no further.
+Strength is shown as a meter instead, which can call a password weak without
+rejecting it.
+
+Data created before accounts existed has no owner, and a NULL owner matches
+nobody's query — so a startup task adopts every orphaned row into the first
+account rather than letting the corpus vanish the moment sign-in was switched on.
+
 ### Step 8 — Reports
 A literature review with a corpus table, synthesis, per-paper comparison table, corpus-wide
 dataset/method/metric tables, research gaps, a knowledge-graph summary and references —
@@ -392,6 +418,10 @@ Interactive docs at `/docs`. Highlights:
 | `GET` | `/api/graph` | Graph for visualisation (filter by paper, type, degree) |
 | `POST` | `/api/reports` | Generate a literature review |
 | `GET` | `/api/reports/{id}/pdf` | Download PDF |
+| `POST` | `/api/auth/register` | Create an account and email an activation link |
+| `POST` | `/api/auth/activate` | Redeem an activation link |
+| `POST` | `/api/auth/login` | Sign in with a username or email |
+| `POST` | `/api/auth/password` | Change your password |
 | `GET` | `/api/health` | Which backends are actually active |
 
 An empty `paper_ids` array means "the whole indexed corpus".

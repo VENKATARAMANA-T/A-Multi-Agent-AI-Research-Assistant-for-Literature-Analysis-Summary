@@ -8,8 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlmodel import Session, desc, select
 
 from app.agents.hypothesis import assess_many
+from app.api.deps import current_user, owned_paper_ids
 from app.database import get_session
-from app.models import AgentRun, Hypothesis
+from app.models import AgentRun, Hypothesis, User
 from app.schemas import ClosedLbdResponse, HypothesisSummary, LbdRequest, LbdResponse
 from app.services.graph_store import get_graph_store
 from app.services.lbd import closed_discovery, open_discovery, rankable_terms
@@ -19,12 +20,23 @@ router = APIRouter(prefix="/api/lbd", tags=["discovery"])
 
 
 @router.get("/terms", summary="Entities worth starting a search from")
-def terms(limit: int = Query(default=40, ge=1, le=200)) -> list[dict]:
-    return rankable_terms(get_graph_store().fetch(), limit=limit)
+def terms(
+    limit: int = Query(default=40, ge=1, le=200),
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> list[dict]:
+    scope = owned_paper_ids(session, user, None)
+    if not scope:
+        return []
+    return rankable_terms(get_graph_store().fetch(paper_ids=scope, limit=10000), limit=limit)
 
 
 @router.post("", response_model=LbdResponse, summary="Find implied connections (ABC model)")
-def discover(payload: LbdRequest, session: Session = Depends(get_session)) -> LbdResponse:
+def discover(
+    payload: LbdRequest,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> LbdResponse:
     """Open discovery: given A, propose every C the literature implies.
 
     `strict` applies Swanson's criterion — A and C must share no paper at all,
@@ -32,7 +44,10 @@ def discover(payload: LbdRequest, session: Session = Depends(get_session)) -> Lb
     requires that no paper states the link directly, which is what a small
     corpus can realistically produce.
     """
-    graph = get_graph_store().fetch()
+    scope = owned_paper_ids(session, user, None)
+    if not scope:
+        raise HTTPException(status_code=409, detail="Upload and index a paper first.")
+    graph = get_graph_store().fetch(paper_ids=scope, limit=10000)
 
     candidates, diagnostics = open_discovery(
         graph,
@@ -64,7 +79,7 @@ def discover(payload: LbdRequest, session: Session = Depends(get_session)) -> Lb
             judgement = item.get("assessment")
             if not judgement:
                 continue
-            saved_ids.append(_save(session, item, judgement, payload.mode))
+            saved_ids.append(_save(session, item, judgement, payload.mode, user.id))
 
         session.add(
             AgentRun(
@@ -74,6 +89,7 @@ def discover(payload: LbdRequest, session: Session = Depends(get_session)) -> Lb
                 status="completed" if llm_calls and not errors else "partial",
                 trace=delta.get("trace") or [],
                 result={"candidates": len(items), "assessed": llm_calls},
+                owner_id=user.id,
                 error="; ".join(errors) or None,
                 duration_ms=int((delta.get("trace") or [{}])[0].get("duration_ms", 0)),
             )
@@ -101,7 +117,9 @@ def _corpus_note(diagnostics: dict, mode: str) -> str:
     )
 
 
-def _save(session: Session, item: dict, judgement: dict, mode: str) -> str:
+def _save(
+    session: Session, item: dict, judgement: dict, mode: str, owner_id: str
+) -> str:
     paper_ids = sorted(
         {
             paper
@@ -110,6 +128,7 @@ def _save(session: Session, item: dict, judgement: dict, mode: str) -> str:
         }
     )
     record = Hypothesis(
+        owner_id=owner_id,
         source_term=item.get("a_name", ""),
         target_term=item.get("c_name", ""),
         target_type=item.get("c_type", "Concept"),
@@ -134,12 +153,22 @@ def _save(session: Session, item: dict, judgement: dict, mode: str) -> str:
 
 
 @router.post("/closed", response_model=ClosedLbdResponse, summary="Why are A and C linked?")
-def closed(payload: LbdRequest) -> ClosedLbdResponse:
+def closed(
+    payload: LbdRequest,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> ClosedLbdResponse:
     """Closed discovery: given both ends, show the intermediate terms."""
     if not payload.target:
         raise HTTPException(status_code=400, detail="Closed discovery needs a target term.")
 
-    chains, diagnostics = closed_discovery(get_graph_store().fetch(), payload.source, payload.target)
+    scope = owned_paper_ids(session, user, None)
+    graph = (
+        get_graph_store().fetch(paper_ids=scope, limit=10000)
+        if scope
+        else {"nodes": [], "edges": []}
+    )
+    chains, diagnostics = closed_discovery(graph, payload.source, payload.target)
     if diagnostics.get("reason"):
         raise HTTPException(status_code=404, detail=diagnostics["reason"])
 
@@ -157,8 +186,14 @@ def list_hypotheses(
     starred: bool | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     session: Session = Depends(get_session),
+    user: User = Depends(current_user),
 ) -> list[HypothesisSummary]:
-    statement = select(Hypothesis).order_by(desc(Hypothesis.created_at)).limit(limit)
+    statement = (
+        select(Hypothesis)
+        .where(Hypothesis.owner_id == user.id)
+        .order_by(desc(Hypothesis.created_at))
+        .limit(limit)
+    )
     if verdict:
         statement = statement.where(Hypothesis.verdict == verdict)
     if starred is not None:
@@ -167,10 +202,14 @@ def list_hypotheses(
 
 
 @router.post("/hypotheses/{hypothesis_id}/star", response_model=HypothesisSummary, summary="Star a hypothesis")
-def star(hypothesis_id: str, starred: bool = Query(default=True),
-         session: Session = Depends(get_session)) -> HypothesisSummary:
+def star(
+    hypothesis_id: str,
+    starred: bool = Query(default=True),
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> HypothesisSummary:
     record = session.get(Hypothesis, hypothesis_id)
-    if record is None:
+    if record is None or record.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Hypothesis not found.")
     record.starred = starred
     session.add(record)
@@ -180,9 +219,13 @@ def star(hypothesis_id: str, starred: bool = Query(default=True),
 
 
 @router.delete("/hypotheses/{hypothesis_id}", status_code=204, summary="Delete a hypothesis")
-def delete_hypothesis(hypothesis_id: str, session: Session = Depends(get_session)) -> Response:
+def delete_hypothesis(
+    hypothesis_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> Response:
     record = session.get(Hypothesis, hypothesis_id)
-    if record is None:
+    if record is None or record.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Hypothesis not found.")
     session.delete(record)
     session.commit()

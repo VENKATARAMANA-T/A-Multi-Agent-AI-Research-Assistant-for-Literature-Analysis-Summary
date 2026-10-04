@@ -141,6 +141,7 @@ def run_workflow(
     top_k: int | None = None,
     focus: str | None = None,
     persist: bool = True,
+    owner_id: str | None = None,
     **options: Any,
 ) -> dict[str, Any]:
     """Execute the workflow and return a serialisable result envelope."""
@@ -191,11 +192,13 @@ def run_workflow(
     if persist:
         # The id goes back to the caller so a result can be handed to the
         # Verification Agent later without re-running the whole workflow.
-        result["run_id"] = _persist_run(result, error)
+        result["run_id"] = _persist_run(result, error, owner_id)
     return result
 
 
-def _persist_run(result: dict[str, Any], error: str | None) -> str | None:
+def _persist_run(
+    result: dict[str, Any], error: str | None, owner_id: str | None = None
+) -> str | None:
     """Write an audit record; never let bookkeeping break the request."""
     try:
         from app.database import session_scope
@@ -216,6 +219,7 @@ def _persist_run(result: dict[str, Any], error: str | None) -> str | None:
                 result=payload,
                 error=error or ("; ".join(result["errors"]) if result["errors"] else None),
                 duration_ms=int(result["duration_ms"]),
+                owner_id=owner_id,
             )
             session.add(run)
             session.commit()

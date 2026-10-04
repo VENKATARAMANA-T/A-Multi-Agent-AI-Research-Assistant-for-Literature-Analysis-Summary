@@ -8,10 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlmodel import Session, select
 
 from app.agents.workflow import run_workflow
+from app.api.deps import current_user, owned_paper_ids
 from app.config import settings
 from app.database import get_session
 from app.models import (
     AgentRun,
+    User,
     Conversation,
     ExtractionRecord,
     Paper,
@@ -31,43 +33,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
 
-def _validate_papers(session: Session, paper_ids: list[str], minimum: int = 1) -> list[str]:
-    """Resolve the requested papers, defaulting to the whole indexed corpus."""
-    if paper_ids:
-        found = list(session.exec(select(Paper).where(Paper.id.in_(paper_ids))).all())  # type: ignore[attr-defined]
-        missing = set(paper_ids) - {paper.id for paper in found}
-        if missing:
-            raise HTTPException(status_code=404, detail=f"Unknown paper id(s): {', '.join(sorted(missing))}")
-        unindexed = [p.id for p in found if p.status != PaperStatus.INDEXED]
-        if unindexed:
-            raise HTTPException(
-                status_code=409,
-                detail=f"These papers are not indexed yet: {', '.join(unindexed)}",
-            )
-        resolved = [paper.id for paper in found]
-    else:
-        resolved = [
-            paper.id for paper in session.exec(select(Paper).where(Paper.status == PaperStatus.INDEXED)).all()
-        ]
-
-    if len(resolved) < minimum:
-        raise HTTPException(
-            status_code=409,
-            detail=f"This analysis needs at least {minimum} indexed paper(s); found {len(resolved)}.",
-        )
-    return resolved
+def _validate_papers(
+    session: Session, user: User, paper_ids: list[str], minimum: int = 1
+) -> list[str]:
+    """Resolve the requested papers within this account's corpus."""
+    return owned_paper_ids(session, user, paper_ids, minimum=minimum)
 
 
 @router.post("/ask", response_model=AgentRunResponse, summary="Question Answering Agent (RAG)")
-def ask(payload: AskRequest, session: Session = Depends(get_session)) -> AgentRunResponse:
-    paper_ids = _validate_papers(session, payload.paper_ids)
+def ask(payload: AskRequest,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> AgentRunResponse:
+    paper_ids = _validate_papers(session, user, payload.paper_ids)
 
     # A follow-up like "why?" needs the earlier turns to resolve against.
     conversation = None
     history: list[dict] = []
     if payload.conversation_id:
         conversation = session.get(Conversation, payload.conversation_id)
-        if conversation is None:
+        if conversation is None or conversation.owner_id != user.id:
             raise HTTPException(status_code=404, detail="Conversation not found.")
         turns = settings.conversation_memory_turns * 2
         history = [
@@ -77,6 +62,7 @@ def ask(payload: AskRequest, session: Session = Depends(get_session)) -> AgentRu
 
     result = run_workflow(
         "qa",
+        owner_id=user.id,
         question=payload.question,
         paper_ids=paper_ids,
         top_k=payload.top_k,
@@ -85,7 +71,7 @@ def ask(payload: AskRequest, session: Session = Depends(get_session)) -> AgentRu
     )
 
     if payload.conversation_id or payload.start_conversation:
-        conversation = _append_turn(session, conversation, paper_ids, payload.question, result)
+        conversation = _append_turn(session, conversation, paper_ids, payload.question, result, user.id)
         result["conversation_id"] = conversation.id
 
     return AgentRunResponse(**result)
@@ -97,6 +83,7 @@ def _append_turn(
     paper_ids: list[str],
     question: str,
     result: dict,
+    owner_id: str,
 ) -> Conversation:
     """Record the exchange so the next question can refer back to it."""
     answer = result.get("answer") or {}
@@ -106,6 +93,7 @@ def _append_turn(
             title=question[:120],
             paper_ids=paper_ids,
             messages=[],
+            owner_id=owner_id,
         )
 
     messages = list(conversation.messages or [])
@@ -132,9 +120,13 @@ def _append_turn(
 def list_conversations(
     limit: int = Query(default=25, ge=1, le=200),
     session: Session = Depends(get_session),
+    user: User = Depends(current_user),
 ) -> list[dict]:
     rows = session.exec(
-        select(Conversation).order_by(Conversation.updated_at.desc()).limit(limit)  # type: ignore[attr-defined]
+        select(Conversation)
+        .where(Conversation.owner_id == user.id)
+        .order_by(Conversation.updated_at.desc())  # type: ignore[attr-defined]
+        .limit(limit)
     ).all()
     return [
         {
@@ -149,9 +141,13 @@ def list_conversations(
 
 
 @router.get("/conversations/{conversation_id}", summary="Get a conversation")
-def get_conversation(conversation_id: str, session: Session = Depends(get_session)) -> dict:
+def get_conversation(
+    conversation_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> dict:
     conversation = session.get(Conversation, conversation_id)
-    if conversation is None:
+    if conversation is None or conversation.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Conversation not found.")
     return {
         "id": conversation.id,
@@ -164,9 +160,13 @@ def get_conversation(conversation_id: str, session: Session = Depends(get_sessio
 
 
 @router.delete("/conversations/{conversation_id}", status_code=204, summary="Delete a conversation")
-def delete_conversation(conversation_id: str, session: Session = Depends(get_session)) -> Response:
+def delete_conversation(
+    conversation_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> Response:
     conversation = session.get(Conversation, conversation_id)
-    if conversation is None:
+    if conversation is None or conversation.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Conversation not found.")
     session.delete(conversation)
     session.commit()
@@ -174,15 +174,18 @@ def delete_conversation(conversation_id: str, session: Session = Depends(get_ses
 
 
 @router.post("/summarize", response_model=AgentRunResponse, summary="Summarization Agent")
-def summarize(payload: SummarizeRequest, session: Session = Depends(get_session)) -> AgentRunResponse:
-    paper_ids = _validate_papers(session, payload.paper_ids)
+def summarize(payload: SummarizeRequest,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> AgentRunResponse:
+    paper_ids = _validate_papers(session, user, payload.paper_ids)
 
     if payload.scope == "single":
         if len(paper_ids) != 1:
             raise HTTPException(status_code=400, detail="Single-paper summarisation needs exactly one paper id.")
-        result = run_workflow("summarize", paper_ids=paper_ids)
+        result = run_workflow("summarize", paper_ids=paper_ids, owner_id=user.id)
     else:
-        result = run_workflow("multi_summarize", paper_ids=paper_ids)
+        result = run_workflow("multi_summarize", paper_ids=paper_ids, owner_id=user.id)
 
     if result.get("summary"):
         session.add(
@@ -199,9 +202,12 @@ def summarize(payload: SummarizeRequest, session: Session = Depends(get_session)
 
 
 @router.post("/extract", response_model=AgentRunResponse, summary="Information Extraction Agent")
-def extract(payload: PaperIdsRequest, session: Session = Depends(get_session)) -> AgentRunResponse:
-    paper_ids = _validate_papers(session, payload.paper_ids)
-    result = run_workflow("extract", paper_ids=paper_ids)
+def extract(payload: PaperIdsRequest,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> AgentRunResponse:
+    paper_ids = _validate_papers(session, user, payload.paper_ids)
+    result = run_workflow("extract", paper_ids=paper_ids, owner_id=user.id)
 
     for record in (result.get("extraction") or {}).get("papers", []):
         if record.get("paper_id"):
@@ -212,24 +218,33 @@ def extract(payload: PaperIdsRequest, session: Session = Depends(get_session)) -
 
 
 @router.post("/gaps", response_model=AgentRunResponse, summary="Research Gap Agent")
-def find_gaps(payload: GapRequest, session: Session = Depends(get_session)) -> AgentRunResponse:
-    paper_ids = _validate_papers(session, payload.paper_ids)
-    result = run_workflow("gap", paper_ids=paper_ids, focus=payload.focus)
+def find_gaps(payload: GapRequest,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> AgentRunResponse:
+    paper_ids = _validate_papers(session, user, payload.paper_ids)
+    result = run_workflow("gap", paper_ids=paper_ids, focus=payload.focus, owner_id=user.id)
     return AgentRunResponse(**result)
 
 
 @router.post("/graph/build", response_model=AgentRunResponse, summary="Knowledge Graph Agent")
-def build_graph(payload: PaperIdsRequest, session: Session = Depends(get_session)) -> AgentRunResponse:
-    paper_ids = _validate_papers(session, payload.paper_ids)
-    result = run_workflow("graph", paper_ids=paper_ids)
+def build_graph(payload: PaperIdsRequest,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> AgentRunResponse:
+    paper_ids = _validate_papers(session, user, payload.paper_ids)
+    result = run_workflow("graph", paper_ids=paper_ids, owner_id=user.id)
     return AgentRunResponse(**result)
 
 
 @router.post("/review", response_model=AgentRunResponse, summary="Full pipeline (summary + extraction + gaps + graph)")
-def full_review(payload: GapRequest, session: Session = Depends(get_session)) -> AgentRunResponse:
+def full_review(payload: GapRequest,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> AgentRunResponse:
     """Runs every agent in one stateful LangGraph execution."""
-    paper_ids = _validate_papers(session, payload.paper_ids)
-    result = run_workflow("review", paper_ids=paper_ids, focus=payload.focus)
+    paper_ids = _validate_papers(session, user, payload.paper_ids)
+    result = run_workflow("review", paper_ids=paper_ids, focus=payload.focus, owner_id=user.id)
 
     if result.get("summary"):
         session.add(
@@ -248,8 +263,14 @@ def list_runs(
     limit: int = Query(default=25, ge=1, le=200),
     intent: str | None = Query(default=None),
     session: Session = Depends(get_session),
+    user: User = Depends(current_user),
 ) -> list[dict]:
-    statement = select(AgentRun).order_by(AgentRun.created_at.desc()).limit(limit)  # type: ignore[attr-defined]
+    statement = (
+        select(AgentRun)
+        .where(AgentRun.owner_id == user.id)
+        .order_by(AgentRun.created_at.desc())  # type: ignore[attr-defined]
+        .limit(limit)
+    )
     if intent:
         statement = statement.where(AgentRun.intent == intent)
     return [
@@ -269,9 +290,13 @@ def list_runs(
 
 
 @router.get("/runs/{run_id}", summary="One agent run with its full result payload")
-def get_run(run_id: str, session: Session = Depends(get_session)) -> dict:
+def get_run(
+    run_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> dict:
     run = session.get(AgentRun, run_id)
-    if run is None:
+    if run is None or run.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Agent run not found.")
     return {
         "id": run.id,

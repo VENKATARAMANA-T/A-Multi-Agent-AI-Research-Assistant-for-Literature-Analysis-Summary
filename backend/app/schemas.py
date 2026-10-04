@@ -355,6 +355,68 @@ class AgentRunResponse(BaseModel):
     conversation_id: Optional[str] = None
 
 
+class RegisterRequest(BaseModel):
+    first_name: str = Field(min_length=1, max_length=60)
+    last_name: str = Field(min_length=1, max_length=60)
+    username: str = Field(min_length=3, max_length=32)
+    email: str = Field(min_length=5, max_length=200)
+    password: str = Field(min_length=1, max_length=200)
+    confirm_password: str = Field(min_length=1, max_length=200)
+
+
+class LoginRequest(BaseModel):
+    # One field, because "username or email" is one question to the person
+    # signing in and should not be two boxes.
+    identifier: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class ActivateRequest(BaseModel):
+    token: str = Field(min_length=10, max_length=2000)
+
+
+class ResendActivationRequest(BaseModel):
+    identifier: str = Field(min_length=1, max_length=200)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=1, max_length=200)
+    confirm_password: str = Field(min_length=1, max_length=200)
+
+
+class UserProfile(BaseModel):
+    id: str
+    username: str
+    email: str
+    first_name: str
+    last_name: str
+    full_name: str
+    is_active: bool
+    created_at: datetime
+    last_login_at: Optional[datetime] = None
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: UserProfile
+
+
+class RegisterResponse(BaseModel):
+    message: str
+    email_sent: bool
+    detail: str
+    # Present only when no mail server is configured and this is not
+    # production, so the flow can be finished on a laptop.
+    activation_link: Optional[str] = None
+
+
+class MessageResponse(BaseModel):
+    message: str
+
+
 class VerifyRequest(BaseModel):
     """Verify either a stored agent run, or a piece of text pasted in directly."""
 

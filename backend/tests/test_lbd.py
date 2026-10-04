@@ -324,7 +324,39 @@ def test_no_candidates_makes_no_calls():
 
 
 def seed_graph(graph):
+    """Persist the graph *and* the papers it refers to.
+
+    The graph endpoints filter by the caller's papers, because one graph
+    database holds every account's entities. A graph whose papers nobody owns is
+    correctly invisible, so the fixture's p1..p4 have to exist as rows belonging
+    to the signed-in account.
+    """
+    from app.database import session_scope
+    from app.models import Paper, PaperStatus
     from app.services.graph_store import get_graph_store
+    from tests.conftest import seed_user_id
+
+    owner = seed_user_id()
+    referenced = {
+        paper_id
+        for item in graph["nodes"] + graph["edges"]
+        for paper_id in (item.get("papers") or [])
+    }
+
+    with session_scope() as session:
+        for paper_id in sorted(referenced):
+            if session.get(Paper, paper_id) is None:
+                session.add(
+                    Paper(
+                        id=paper_id,
+                        filename=f"{paper_id}.pdf",
+                        file_path="",
+                        content_hash=paper_id,
+                        status=PaperStatus.INDEXED,
+                        owner_id=owner,
+                    )
+                )
+        session.commit()
 
     get_graph_store().persist(graph)
 

@@ -12,8 +12,10 @@ from app.services.llm import parse_json_object
 
 
 def ingest(path) -> str:
+    from tests.conftest import seed_user_id
+
     with session_scope() as session:
-        paper, _ = store_upload(session, path.name, path.read_bytes())
+        paper, _ = store_upload(session, path.name, path.read_bytes(), seed_user_id())
         process_paper(session, paper.id)
         return paper.id
 

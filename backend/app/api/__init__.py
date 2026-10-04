@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.api import (
     routes_agents,
+    routes_auth,
     routes_discovery,
     routes_figures,
     routes_graph,
@@ -19,6 +20,7 @@ from app.api import (
 
 api_router = APIRouter()
 api_router.include_router(routes_system.router)
+api_router.include_router(routes_auth.router)
 api_router.include_router(routes_papers.router)
 api_router.include_router(routes_jobs.router)
 api_router.include_router(routes_figures.router)

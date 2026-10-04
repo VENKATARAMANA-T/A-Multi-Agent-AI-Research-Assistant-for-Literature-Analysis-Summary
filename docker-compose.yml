@@ -39,6 +39,15 @@
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-researchcompass}
       CORS_ORIGINS: http://localhost:5173,http://localhost:8080,http://127.0.0.1:8080
+      # Set JWT_SECRET to keep sessions alive across restarts; left empty,
+      # the backend generates one per process and everyone is signed out.
+      JWT_SECRET: ${JWT_SECRET:-}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-ResearchCompass <no-reply@researchcompass.local>}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
       ENVIRONMENT: docker

@@ -159,7 +159,7 @@ export default function Upload() {
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
-                onClick={() => navigate('/library')}
+                onClick={() => navigate('/app/library')}
               >
                 Go to library
               </button>

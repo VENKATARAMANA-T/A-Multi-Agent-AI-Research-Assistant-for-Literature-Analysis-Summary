@@ -46,6 +46,12 @@ neo4j==5.27.0
 markdown==3.7
 reportlab==4.2.5
 
+# --- Authentication ----------------------------------------------------------
+# bcrypt for password hashing (deliberately slow, salted per password) and
+# PyJWT for signed access tokens.
+bcrypt==5.0.0
+PyJWT==2.10.1
+
 # --- Misc --------------------------------------------------------------------
 httpx==0.28.1
 tenacity==9.0.0

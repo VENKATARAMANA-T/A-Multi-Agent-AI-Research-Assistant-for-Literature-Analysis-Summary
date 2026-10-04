@@ -11,9 +11,10 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
+from app.api.deps import current_user, owned_paper
 from app.config import settings
 from app.database import get_session
-from app.models import Paper
+from app.models import Paper, User
 from app.schemas import DiscoveryResponse
 from app.services import discovery
 
@@ -21,8 +22,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/discover", tags=["discovery"])
 
 
-def _known(session: Session) -> tuple[set[str], set[str]]:
-    papers = list(session.exec(select(Paper)).all())
+def _known(session: Session, user: User) -> tuple[set[str], set[str]]:
+    papers = list(session.exec(select(Paper).where(Paper.owner_id == user.id)).all())
     dois = {paper.doi for paper in papers if paper.doi}
     titles = {paper.title for paper in papers if paper.title}
     return dois, titles
@@ -39,11 +40,10 @@ def related(
     limit: int = Query(default=15, ge=1, le=50),
     exclude_known: bool = Query(default=True),
     session: Session = Depends(get_session),
+    user: User = Depends(current_user),
 ) -> DiscoveryResponse:
     _guard()
-    paper = session.get(Paper, paper_id)
-    if paper is None:
-        raise HTTPException(status_code=404, detail="Paper not found.")
+    paper = owned_paper(session, user, paper_id)
 
     try:
         candidates = discovery.related_to(title=paper.title, doi=paper.doi, limit=limit)
@@ -51,7 +51,7 @@ def related(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     if exclude_known:
-        dois, titles = _known(session)
+        dois, titles = _known(session, user)
         candidates = discovery.deduplicate(candidates, dois, titles)
 
     return DiscoveryResponse(
@@ -69,6 +69,7 @@ def search(
     year_from: int | None = Query(default=None, ge=1800, le=2100),
     exclude_known: bool = Query(default=True),
     session: Session = Depends(get_session),
+    user: User = Depends(current_user),
 ) -> DiscoveryResponse:
     _guard()
     try:
@@ -77,7 +78,7 @@ def search(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     if exclude_known:
-        dois, titles = _known(session)
+        dois, titles = _known(session, user)
         candidates = discovery.deduplicate(candidates, dois, titles)
 
     return DiscoveryResponse(
@@ -95,6 +96,7 @@ def gaps(
     ),
     limit: int = Query(default=20, ge=1, le=50),
     session: Session = Depends(get_session),
+    user: User = Depends(current_user),
 ) -> DiscoveryResponse:
     """Related work across a set of papers, ranked by how often it recurs.
 
@@ -104,7 +106,11 @@ def gaps(
     without knowing what it was compared against.
     """
     _guard()
-    papers = [p for p in session.exec(select(Paper)).all() if p.title]
+    papers = [
+        p
+        for p in session.exec(select(Paper).where(Paper.owner_id == user.id)).all()
+        if p.title
+    ]
     if paper_ids:
         wanted = set(paper_ids)
         missing = wanted - {paper.id for paper in papers}
@@ -129,7 +135,7 @@ def gaps(
     if not reached:
         raise HTTPException(status_code=502, detail="Could not reach OpenAlex.")
 
-    dois, titles = _known(session)
+    dois, titles = _known(session, user)
     ranked = sorted(tally.values(), key=lambda pair: (-pair[1], -pair[0].citations))
     candidates = discovery.deduplicate([pair[0] for pair in ranked], dois, titles)
 

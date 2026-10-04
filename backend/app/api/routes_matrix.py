@@ -12,8 +12,9 @@ from sqlmodel import Session, desc, select
 from app.agents.matrix import run_matrix, to_csv
 from app.agents.retrieval import load_documents_node
 from app.agents.state import new_state
+from app.api.deps import current_user, owned_paper_ids
 from app.database import get_session
-from app.models import MatrixRun, Paper, PaperStatus
+from app.models import MatrixRun, Paper, PaperStatus, User
 from app.schemas import MatrixRequest, MatrixResponse, MatrixRunSummary
 
 logger = logging.getLogger(__name__)
@@ -23,7 +24,11 @@ MAX_COLUMNS = 12
 
 
 @router.post("", response_model=MatrixResponse, summary="Fill custom columns across papers")
-def create_matrix(payload: MatrixRequest, session: Session = Depends(get_session)) -> MatrixResponse:
+def create_matrix(
+    payload: MatrixRequest,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> MatrixResponse:
     """One LLM call per paper. Columns are defined by the caller."""
     if not payload.columns:
         raise HTTPException(status_code=400, detail="Define at least one column.")
@@ -33,17 +38,7 @@ def create_matrix(payload: MatrixRequest, session: Session = Depends(get_session
             detail=f"At most {MAX_COLUMNS} columns per run; more makes each answer less reliable.",
         )
 
-    if payload.paper_ids:
-        found = list(session.exec(select(Paper).where(Paper.id.in_(payload.paper_ids))).all())  # type: ignore[attr-defined]
-        missing = set(payload.paper_ids) - {paper.id for paper in found}
-        if missing:
-            raise HTTPException(status_code=404, detail=f"Unknown paper id(s): {', '.join(sorted(missing))}")
-        resolved = [paper.id for paper in found if paper.status == PaperStatus.INDEXED]
-    else:
-        resolved = [
-            paper.id
-            for paper in session.exec(select(Paper).where(Paper.status == PaperStatus.INDEXED)).all()
-        ]
+    resolved = owned_paper_ids(session, user, payload.paper_ids or None)
 
     if not resolved:
         raise HTTPException(status_code=409, detail="No indexed papers to compare.")
@@ -58,6 +53,7 @@ def create_matrix(payload: MatrixRequest, session: Session = Depends(get_session
     duration = int((time.perf_counter() - started) * 1000)
 
     run = MatrixRun(
+        owner_id=user.id,
         name=payload.name or f"Comparison of {len(documents)} papers",
         paper_ids=resolved,
         columns=result["columns"],
@@ -86,8 +82,14 @@ def create_matrix(payload: MatrixRequest, session: Session = Depends(get_session
 def list_runs(
     limit: int = Query(default=25, ge=1, le=200),
     session: Session = Depends(get_session),
+    user: User = Depends(current_user),
 ) -> list[MatrixRunSummary]:
-    runs = session.exec(select(MatrixRun).order_by(desc(MatrixRun.created_at)).limit(limit)).all()
+    runs = session.exec(
+        select(MatrixRun)
+        .where(MatrixRun.owner_id == user.id)
+        .order_by(desc(MatrixRun.created_at))
+        .limit(limit)
+    ).all()
     return [
         MatrixRunSummary(
             id=run.id,
@@ -101,9 +103,13 @@ def list_runs(
 
 
 @router.get("/{run_id}", response_model=MatrixResponse, summary="Get a saved comparison")
-def get_run(run_id: str, session: Session = Depends(get_session)) -> MatrixResponse:
+def get_run(
+    run_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> MatrixResponse:
     run = session.get(MatrixRun, run_id)
-    if run is None:
+    if run is None or run.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Comparison not found.")
     return MatrixResponse(
         id=run.id,
@@ -118,9 +124,13 @@ def get_run(run_id: str, session: Session = Depends(get_session)) -> MatrixRespo
 
 
 @router.get("/{run_id}/csv", response_class=PlainTextResponse, summary="Download as CSV")
-def download_csv(run_id: str, session: Session = Depends(get_session)):
+def download_csv(
+    run_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+):
     run = session.get(MatrixRun, run_id)
-    if run is None:
+    if run is None or run.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Comparison not found.")
     body = to_csv(run.columns or [], run.rows or [])
     filename = (run.name or "comparison")[:50].replace(" ", "_")
@@ -132,11 +142,15 @@ def download_csv(run_id: str, session: Session = Depends(get_session)):
 
 
 @router.delete("/{run_id}", status_code=204, summary="Delete a comparison")
-def delete_run(run_id: str, session: Session = Depends(get_session)):
+def delete_run(
+    run_id: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+):
     from fastapi import Response
 
     run = session.get(MatrixRun, run_id)
-    if run is None:
+    if run is None or run.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Comparison not found.")
     session.delete(run)
     session.commit()

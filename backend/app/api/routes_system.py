@@ -10,8 +10,9 @@ from sqlmodel import Session, func, select
 
 from app import __version__
 from app.config import settings
+from app.api.deps import current_user, owned_paper_ids
 from app.database import get_session
-from app.models import AgentRun, Chunk, Paper, PaperStatus, Report
+from app.models import AgentRun, Chunk, Paper, PaperStatus, Report, User
 from app.schemas import HealthResponse, StatsResponse
 from app.services import llm_cache, ocr, ocr_cache
 from app.services.embeddings import get_embedder
@@ -95,19 +96,47 @@ def clear_cache() -> dict:
 
 
 @router.get("/stats", response_model=StatsResponse, summary="Corpus statistics")
-def stats(session: Session = Depends(get_session)) -> StatsResponse:
-    papers = list(session.exec(select(Paper)).all())
-    chunk_count = session.exec(select(func.count()).select_from(Chunk)).one()
-    run_count = session.exec(select(func.count()).select_from(AgentRun)).one()
-    report_count = session.exec(select(func.count()).select_from(Report)).one()
+def stats(
+    session: Session = Depends(get_session),
+    user: User = Depends(current_user),
+) -> StatsResponse:
+    """This account's corpus, not the installation's."""
+    papers = list(session.exec(select(Paper).where(Paper.owner_id == user.id)).all())
+    paper_ids = [paper.id for paper in papers]
+
+    chunk_count = (
+        session.exec(
+            select(func.count()).select_from(Chunk).where(Chunk.paper_id.in_(paper_ids))
+        ).one()
+        if paper_ids
+        else 0
+    )
+    run_count = session.exec(
+        select(func.count()).select_from(AgentRun).where(AgentRun.owner_id == user.id)
+    ).one()
+    report_count = session.exec(
+        select(func.count()).select_from(Report).where(Report.owner_id == user.id)
+    ).one()
 
     try:
-        vectors = get_vector_store().count()
+        # Counting the whole collection would report every account's
+        # vectors, so this counts the chunks that belong to these papers.
+        vectors = int(chunk_count)
     except Exception:  # pragma: no cover
         vectors = 0
 
     try:
-        graph = get_graph_store().stats()
+        full = get_graph_store().stats()
+        scoped = (
+            get_graph_store().fetch(paper_ids=paper_ids, limit=10000)
+            if paper_ids
+            else {"nodes": [], "edges": []}
+        )
+        graph = {
+            "backend": full.get("backend", "unknown"),
+            "node_count": len(scoped["nodes"]),
+            "edge_count": len(scoped["edges"]),
+        }
     except Exception as exc:  # pragma: no cover
         graph = {"backend": "unavailable", "error": str(exc)}
 

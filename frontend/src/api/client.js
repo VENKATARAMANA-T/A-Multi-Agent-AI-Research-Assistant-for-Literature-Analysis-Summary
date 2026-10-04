@@ -1,5 +1,39 @@
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
+const TOKEN_KEY = 'researchcompass.token';
+
+// Held in memory as well as localStorage so a request issued before the context
+// has mounted still carries the token.
+let accessToken = null;
+try {
+  accessToken = localStorage.getItem(TOKEN_KEY);
+} catch {
+  accessToken = null;
+}
+
+// Set by the auth context so a rejected token can end the session everywhere at
+// once, rather than every page discovering it separately.
+let onUnauthorized = null;
+
+export function setAccessToken(token) {
+  accessToken = token || null;
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // A browser with storage disabled still works; the session just ends when
+    // the tab closes.
+  }
+}
+
+export function getAccessToken() {
+  return accessToken;
+}
+
+export function setUnauthorizedHandler(handler) {
+  onUnauthorized = handler;
+}
+
 export class ApiError extends Error {
   constructor(message, status, payload) {
     super(message);
@@ -9,8 +43,12 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path, { method = 'GET', body, headers = {}, signal } = {}) {
+async function request(path, { method = 'GET', body, headers = {}, signal, auth = true } = {}) {
   const options = { method, headers: { ...headers }, signal };
+
+  if (auth && accessToken) {
+    options.headers.Authorization = `Bearer ${accessToken}`;
+  }
 
   if (body instanceof FormData) {
     options.body = body;
@@ -29,18 +67,45 @@ async function request(path, { method = 'GET', body, headers = {}, signal } = {}
     : await response.text();
 
   if (!response.ok) {
+    // An expired or rejected token ends the session once, centrally.
+    if (response.status === 401 && auth && onUnauthorized) {
+      onUnauthorized();
+    }
+
     const detail =
       (payload && typeof payload === 'object' && payload.detail) ||
       (typeof payload === 'string' && payload) ||
       `Request failed with status ${response.status}`;
-    throw new ApiError(
-      typeof detail === 'string' ? detail : JSON.stringify(detail),
-      response.status,
-      payload,
-    );
+
+    throw new ApiError(flattenDetail(detail, response.status), response.status, payload);
   }
 
   return payload;
+}
+
+/**
+ * FastAPI returns validation problems as {field: [message, ...]}, which is what
+ * a form needs but not what a banner can show. This keeps the structure on the
+ * error object for the form and produces a readable sentence for everything else.
+ */
+function flattenDetail(detail, status) {
+  if (typeof detail === 'string') return detail;
+
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    const parts = Object.values(detail)
+      .flatMap((value) => (Array.isArray(value) ? value : [value]))
+      .filter((value) => typeof value === 'string');
+    if (parts.length) return parts.join(' ');
+  }
+
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => (typeof item === 'string' ? item : item?.msg))
+      .filter(Boolean);
+    if (parts.length) return parts.join(' ');
+  }
+
+  return `Request failed with status ${status}`;
 }
 
 const toQuery = (params) => {
@@ -56,6 +121,18 @@ const toQuery = (params) => {
 
 export const api = {
   health: () => request('/api/health'),
+
+  // --- auth -----------------------------------------------------------------
+  register: (payload) => request('/api/auth/register', { method: 'POST', body: payload, auth: false }),
+  login: (payload) => request('/api/auth/login', { method: 'POST', body: payload, auth: false }),
+  activate: (token) => request('/api/auth/activate', { method: 'POST', body: { token }, auth: false }),
+  resendActivation: (identifier) =>
+    request('/api/auth/resend-activation', { method: 'POST', body: { identifier }, auth: false }),
+  me: () => request('/api/auth/me'),
+  changePassword: (payload) => request('/api/auth/password', { method: 'POST', body: payload }),
+  passwordStrength: (password) =>
+    request('/api/auth/password/strength', { method: 'POST', body: { password }, auth: false }),
+  passwordRules: () => request('/api/auth/rules', { auth: false }),
   stats: () => request('/api/stats'),
 
   // --- papers ---------------------------------------------------------------

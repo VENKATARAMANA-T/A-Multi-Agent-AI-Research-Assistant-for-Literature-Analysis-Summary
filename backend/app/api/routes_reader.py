@@ -10,8 +10,9 @@ from fastapi.responses import PlainTextResponse
 from sqlmodel import Session, select
 
 from app.agents.explain import explain as run_explain
+from app.api.deps import current_user, owned_paper, owned_paper_ids
 from app.database import get_session
-from app.models import Chunk, Paper
+from app.models import Chunk, Paper, User
 from app.schemas import (
     CitationResponse,
     ExplainRequest,
@@ -33,6 +34,7 @@ def highlight(
     text: str | None = Query(default=None, max_length=4000),
     page: int | None = Query(default=None, ge=1),
     session: Session = Depends(get_session),
+    user: User = Depends(current_user),
 ) -> HighlightResponse:
     """Return the rectangles a passage occupies, so a citation can be shown in place.
 
@@ -41,7 +43,7 @@ def highlight(
     ligature and hyphenation normalisation, so matching needs the same engine
     that produced it.
     """
-    paper = session.get(Paper, paper_id)
+    paper = owned_paper(session, user, paper_id)
     if paper is None:
         raise HTTPException(status_code=404, detail="Paper not found.")
     if not paper.file_path or not Path(paper.file_path).exists():
@@ -87,10 +89,11 @@ def highlight(
 def explain_passage(
     payload: ExplainRequest,
     session: Session = Depends(get_session),
+    user: User = Depends(current_user),
 ) -> ExplainResponse:
     paper_title = None
     if payload.paper_id:
-        paper = session.get(Paper, payload.paper_id)
+        paper = owned_paper(session, user, payload.paper_id)
         if paper is None:
             raise HTTPException(status_code=404, detail="Paper not found.")
         paper_title = paper.title
@@ -118,8 +121,9 @@ def citation(
     paper_id: str,
     style: str = Query(default="bibtex"),
     session: Session = Depends(get_session),
+    user: User = Depends(current_user),
 ) -> CitationResponse:
-    paper = session.get(Paper, paper_id)
+    paper = owned_paper(session, user, paper_id)
     if paper is None:
         raise HTTPException(status_code=404, detail="Paper not found.")
     try:
@@ -135,6 +139,7 @@ def bibliography(
     paper_ids: list[str] | None = Query(default=None),
     download: bool = Query(default=False),
     session: Session = Depends(get_session),
+    user: User = Depends(current_user),
 ):
     if style.lower() not in citations.STYLES:
         raise HTTPException(
@@ -142,7 +147,7 @@ def bibliography(
             detail=f"Unknown citation style '{style}'. Choose from: {', '.join(citations.STYLES)}",
         )
 
-    statement = select(Paper)
+    statement = select(Paper).where(Paper.owner_id == user.id)
     if paper_ids:
         statement = statement.where(Paper.id.in_(paper_ids))  # type: ignore[attr-defined]
     papers = list(session.exec(statement).all())

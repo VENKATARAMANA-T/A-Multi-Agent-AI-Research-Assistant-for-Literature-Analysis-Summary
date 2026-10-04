@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+import secrets
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
+
+# Generated once per process when JWT_SECRET is unset. Module level rather than
+# an attribute so it survives every reference to the settings singleton.
+_EPHEMERAL_SECRET: str | None = None
 
 
 class Settings(BaseSettings):
@@ -136,6 +142,31 @@ class Settings(BaseSettings):
     # once billing is enabled.
     llm_requests_per_minute: int = 5
 
+    # --- Authentication ------------------------------------------------------
+    # Signs access and activation tokens. A generated default keeps development
+    # working out of the box, at the cost of invalidating every token on
+    # restart — set it explicitly anywhere tokens must outlive a deploy.
+    jwt_secret: str = ""
+    jwt_algorithm: str = "HS256"
+    access_token_minutes: int = 60 * 12
+    # The brief asked for five minutes, and short is right: an activation link
+    # sits in an inbox, which is not a safe place for a long-lived credential.
+    activation_token_minutes: int = 5
+    password_min_length: int = 6
+    # Where the activation link points — the frontend, not the API.
+    app_base_url: str = "http://localhost:8080"
+
+    # --- Email ---------------------------------------------------------------
+    # Unset by default so the app runs without a mail server. The activation
+    # link is then logged instead of sent, and outside production it is also
+    # returned by the register endpoint so the flow can be completed locally.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "ResearchCompass <no-reply@researchcompass.local>"
+    smtp_use_tls: bool = True
+
     # --- Neo4j ---------------------------------------------------------------
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
@@ -156,6 +187,29 @@ class Settings(BaseSettings):
     @property
     def llm_enabled(self) -> bool:
         return bool(self.google_api_key)
+
+    @property
+    def resolved_jwt_secret(self) -> str:
+        """The configured secret, or a per-process one generated on first use.
+
+        Generating rather than shipping a default matters: a hard-coded fallback
+        would be published in the repository, and anyone could then mint a token
+        for any account.
+        """
+        if self.jwt_secret:
+            return self.jwt_secret
+        global _EPHEMERAL_SECRET
+        if _EPHEMERAL_SECRET is None:
+            _EPHEMERAL_SECRET = secrets.token_urlsafe(48)
+            logging.getLogger(__name__).warning(
+                "JWT_SECRET is not set; using a generated key. Every session ends "
+                "when the server restarts. Set JWT_SECRET in backend/.env."
+            )
+        return _EPHEMERAL_SECRET
+
+    @property
+    def smtp_configured(self) -> bool:
+        return bool(self.smtp_host)
 
     @property
     def gemini_model_chain(self) -> list[str]:

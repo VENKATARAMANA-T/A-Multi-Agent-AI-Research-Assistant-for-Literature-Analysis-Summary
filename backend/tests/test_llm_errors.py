@@ -81,7 +81,11 @@ def test_quota_error_is_reported_not_retried_by_an_agent(sample_pdf, monkeypatch
     from app.services.llm import set_llm
 
     with session_scope() as session:
-        paper, _ = store_upload(session, sample_pdf.name, sample_pdf.read_bytes())
+        from tests.conftest import seed_user_id
+
+        paper, _ = store_upload(
+            session, sample_pdf.name, sample_pdf.read_bytes(), seed_user_id()
+        )
         process_paper(session, paper.id)
 
     calls = {"n": 0}

@@ -72,15 +72,24 @@ def validate_pdf(data: bytes, filename: str) -> None:
         raise IngestionError(f"'{filename}' is not a valid PDF (missing %PDF header).")
 
 
-def store_upload(session: Session, filename: str, data: bytes) -> tuple[Paper, bool]:
+def store_upload(
+    session: Session, filename: str, data: bytes, owner_id: str | None = None
+) -> tuple[Paper, bool]:
     """Persist the bytes and create (or return the existing) Paper row.
 
     Returns (paper, created). Re-uploading identical bytes is a no-op.
+
+    De-duplication is per owner. Two people uploading the same well-known paper
+    each get their own copy: matching on the hash alone would hand the second
+    one the first one's row, along with its title edits, its figures and its
+    place in someone else's corpus.
     """
     validate_pdf(data, filename)
     content_hash = sha256_bytes(data)
 
-    existing = session.exec(select(Paper).where(Paper.content_hash == content_hash)).first()
+    duplicate = select(Paper).where(Paper.content_hash == content_hash)
+    duplicate = duplicate.where(Paper.owner_id == owner_id)
+    existing = session.exec(duplicate).first()
     if existing:
         logger.info("Duplicate upload ignored: %s matches paper %s", filename, existing.id)
         return existing, False
@@ -91,6 +100,7 @@ def store_upload(session: Session, filename: str, data: bytes) -> tuple[Paper, b
         content_hash=content_hash,
         size_bytes=len(data),
         status=PaperStatus.UPLOADED,
+        owner_id=owner_id,
     )
     session.add(paper)
     session.commit()

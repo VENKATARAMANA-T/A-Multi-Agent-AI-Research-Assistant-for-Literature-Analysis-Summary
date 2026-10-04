@@ -33,6 +33,7 @@ os.environ.update(
         # No throttling against the fake client — otherwise every mocked call
         # would sleep for the real rate-limit interval.
         "LLM_REQUESTS_PER_MINUTE": "0",
+        "JWT_SECRET": "test-secret-not-a-real-key",
         "CHUNK_SIZE": "600",
         "CHUNK_OVERLAP": "80",
         "LOG_LEVEL": "WARNING",
@@ -626,11 +627,51 @@ def fake_llm() -> FakeGemini:
     return client
 
 
+def seed_user_id() -> str:
+    """The id of the bootstrap account, creating it if a test dropped the table.
+
+    Tests ingest through the service layer rather than the API, so they have to
+    name an owner themselves; a paper with no owner belongs to nobody and is
+    invisible to every scoped query.
+    """
+    from app.database import session_scope
+    from app.services.bootstrap import ensure_seed_user
+
+    with session_scope() as session:
+        return ensure_seed_user(session).id
+
+
 @pytest.fixture
-def client() -> TestClient:
+def owner_id() -> str:
+    return seed_user_id()
+
+
+@pytest.fixture
+def anon_client() -> TestClient:
+    """A client with no credentials, for checking that endpoints refuse one."""
     from app.main import app
 
     with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def client() -> TestClient:
+    """Signed in as the seed account.
+
+    Authenticating here rather than in each test keeps the suite about what the
+    endpoints do; `anon_client` covers the unauthenticated case explicitly.
+    """
+    from app.main import app
+    from app.services.bootstrap import SEED_PASSWORD, SEED_USERNAME
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/auth/login",
+            json={"identifier": SEED_USERNAME, "password": SEED_PASSWORD},
+        )
+        assert response.status_code == 200, response.text
+        test_client.headers["Authorization"] = f"Bearer {response.json()['access_token']}"
         yield test_client
 
 
