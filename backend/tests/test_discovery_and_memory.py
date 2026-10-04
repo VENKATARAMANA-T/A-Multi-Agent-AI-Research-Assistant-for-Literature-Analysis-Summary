@@ -8,8 +8,17 @@ from __future__ import annotations
 
 import pytest
 
+from app.database import session_scope
 from app.services import discovery
 from app.services.discovery import Candidate, deduplicate
+from app.services.ingestion import process_paper, store_upload
+
+
+def ingest(path) -> str:
+    with session_scope() as session:
+        paper, _ = store_upload(session, path.name, path.read_bytes())
+        process_paper(session, paper.id)
+        return paper.id
 
 WORK = {
     "id": "https://openalex.org/W123",
@@ -273,4 +282,64 @@ def test_unknown_conversation_is_rejected(client, sample_pdf, fake_llm):
     response = client.post(
         "/api/agents/ask", json={"question": "Anything?", "conversation_id": "missing"}
     )
+    assert response.status_code == 404
+
+
+# --- scoping the gap search --------------------------------------------------
+
+
+def test_gap_search_can_be_scoped_to_chosen_papers(client, sample_pdf, second_pdf, monkeypatch):
+    """"Missing from your corpus" has to say which corpus it meant."""
+    from app.services import discovery
+
+    ingest(sample_pdf)
+    ingest(second_pdf)
+
+    asked: list[str] = []
+
+    def fake_related(title, doi=None, limit=15):
+        asked.append(title)
+        return [
+            discovery.Candidate(
+                external_id="W1", title="A missing paper", relation="related",
+                authors=["X"], year=2021, venue="V", citations=40,
+            )
+        ]
+
+    monkeypatch.setattr(discovery, "related_to", fake_related)
+
+    papers = client.get("/api/papers").json()
+    one = papers[0]["id"]
+
+    response = client.get("/api/discover/gaps", params={"paper_ids": [one]})
+    assert response.status_code == 200
+
+    body = response.json()
+    assert len(asked) == 1, "only the chosen paper should be looked up"
+    assert len(body["searched_papers"]) == 1
+    assert body["candidates"]
+
+
+def test_gap_search_without_paper_ids_uses_the_whole_corpus(client, sample_pdf, second_pdf, monkeypatch):
+    from app.services import discovery
+
+    ingest(sample_pdf)
+    ingest(second_pdf)
+
+    asked: list[str] = []
+    monkeypatch.setattr(
+        discovery,
+        "related_to",
+        lambda title, doi=None, limit=15: (asked.append(title) or []),
+    )
+
+    response = client.get("/api/discover/gaps")
+    assert response.status_code == 200
+    assert len(asked) == 2
+    assert len(response.json()["searched_papers"]) == 2
+
+
+def test_gap_search_rejects_an_unknown_paper(client, sample_pdf):
+    ingest(sample_pdf)
+    response = client.get("/api/discover/gaps", params={"paper_ids": ["nope"]})
     assert response.status_code == 404

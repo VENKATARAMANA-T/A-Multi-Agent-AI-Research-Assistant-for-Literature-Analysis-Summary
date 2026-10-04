@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import api from '../api/client';
+import PaperPicker from '../components/PaperPicker';
 import { Badge, Card, EmptyState, ErrorBanner, Spinner } from '../components/common';
 import { useCorpus } from '../context/CorpusContext';
 
@@ -10,7 +11,7 @@ const MODES = [
 ];
 
 export default function Discover() {
-  const { indexedPapers } = useCorpus();
+  const { indexedPapers, selectedIds, effectiveIds } = useCorpus();
   const [mode, setMode] = useState('gaps');
   const [paperId, setPaperId] = useState('');
   const [query, setQuery] = useState('');
@@ -25,7 +26,8 @@ export default function Discover() {
     setResult(null);
     try {
       if (mode === 'gaps') {
-        setResult(await api.discoverGaps());
+        if (effectiveIds.length === 0) throw new Error('Upload a paper first.');
+        setResult(await api.discoverGaps({ paper_ids: effectiveIds }));
       } else if (mode === 'related') {
         const target = paperId || indexedPapers[0]?.id;
         if (!target) throw new Error('Select a paper first.');
@@ -121,11 +123,27 @@ export default function Discover() {
         )}
 
         {mode === 'gaps' && (
-          <p className="muted">
-            Looks at what your papers cite and relate to, then ranks the works you do not have by
-            how often they recur. A paper several of yours point at is the most likely thing
-            missing from the review.
-          </p>
+          <>
+            <p className="muted">
+              Looks at what the papers below cite and relate to, then ranks the works you do not
+              have by how often they recur. A paper several of yours point at is the most likely
+              thing missing from the review.
+            </p>
+            <label className="field">
+              Base the search on
+              <PaperPicker compact />
+            </label>
+            <p className="muted">
+              {selectedIds.length === 0
+                ? `Searching all ${indexedPapers.length} paper${
+                    indexedPapers.length === 1 ? '' : 's'
+                  } — tick specific ones above to narrow it.`
+                : `Searching ${selectedIds.length} selected paper${
+                    selectedIds.length === 1 ? '' : 's'
+                  }.`}{' '}
+              One OpenAlex lookup per paper, capped at 12. No API key and no Gemini quota is used.
+            </p>
+          </>
         )}
       </Card>
 
@@ -136,6 +154,16 @@ export default function Discover() {
           title={`${result.candidates.length} candidate${result.candidates.length === 1 ? '' : 's'}`}
           subtitle={`for “${result.query}”${result.excluded_known ? ' · papers you already have are excluded' : ''}`}
         >
+          {result.searched_papers?.length > 0 && (
+            <details className="retrieved">
+              <summary>Based on {result.searched_papers.length} of your papers</summary>
+              <ul className="bullets">
+                {result.searched_papers.map((title) => (
+                  <li key={title}>{title}</li>
+                ))}
+              </ul>
+            </details>
+          )}
           {result.candidates.length === 0 ? (
             <EmptyState
               title="Nothing new found"

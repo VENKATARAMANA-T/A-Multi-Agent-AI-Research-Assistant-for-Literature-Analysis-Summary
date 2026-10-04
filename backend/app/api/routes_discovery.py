@@ -90,16 +90,29 @@ def search(
 
 @router.get("/gaps", response_model=DiscoveryResponse, summary="Literature your corpus is missing")
 def gaps(
+    paper_ids: list[str] | None = Query(
+        default=None, description="Base the search on these papers; defaults to the whole corpus."
+    ),
     limit: int = Query(default=20, ge=1, le=50),
     session: Session = Depends(get_session),
 ) -> DiscoveryResponse:
-    """Related work across the whole corpus, ranked by how often it recurs.
+    """Related work across a set of papers, ranked by how often it recurs.
 
-    A paper that several of your papers relate to, but which you do not have,
-    is the most likely thing to be missing from the review.
+    A paper that several of yours relate to, but which you do not have, is the
+    most likely thing to be missing from the review. Which papers were asked is
+    reported back in `query`, because "missing from your corpus" means nothing
+    without knowing what it was compared against.
     """
     _guard()
     papers = [p for p in session.exec(select(Paper)).all() if p.title]
+    if paper_ids:
+        wanted = set(paper_ids)
+        missing = wanted - {paper.id for paper in papers}
+        if missing:
+            raise HTTPException(
+                status_code=404, detail=f"Unknown paper id(s): {', '.join(sorted(missing))}"
+            )
+        papers = [paper for paper in papers if paper.id in wanted]
     if not papers:
         raise HTTPException(status_code=409, detail="No papers in the corpus yet.")
 
@@ -127,9 +140,11 @@ def gaps(
         item["referenced_by_corpus"] = counts.get(candidate.external_id, 1)
         payload.append(item)
 
+    searched = [paper.title for paper in papers[:12] if paper.title]
     return DiscoveryResponse(
         query=f"related work across {reached} paper(s)",
         source="openalex",
         candidates=payload,
         excluded_known=True,
+        searched_papers=searched,
     )

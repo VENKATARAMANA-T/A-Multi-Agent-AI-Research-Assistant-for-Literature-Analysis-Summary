@@ -16,7 +16,11 @@ const FILTERS = [
 ];
 
 export default function Figures() {
-  const { effectiveIds, indexedPapers, llmReady } = useCorpus();
+  // Deliberately `selectedIds`, not `effectiveIds`. Everywhere else an empty
+  // selection means "the whole corpus", but a wall of every figure from every
+  // paper is not a useful default here — and "Read 40 figures" costs 40
+  // requests. Nothing selected shows nothing, so the scope is always explicit.
+  const { selectedIds, indexedPapers, llmReady } = useCorpus();
   const [figures, setFigures] = useState([]);
   const [estimate, setEstimate] = useState(null);
   const [filter, setFilter] = useState('all');
@@ -27,11 +31,18 @@ export default function Figures() {
   const [expanded, setExpanded] = useState(null);
 
   const load = useCallback(async () => {
+    if (selectedIds.length === 0) {
+      setFigures([]);
+      setEstimate(null);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     try {
       const [items, cost] = await Promise.all([
-        api.listFigures(),
-        api.figureEstimate({ paper_ids: effectiveIds }).catch(() => null),
+        api.listFigures({ paper_ids: selectedIds }),
+        api.figureEstimate({ paper_ids: selectedIds }).catch(() => null),
       ]);
       setFigures(items);
       setEstimate(cost);
@@ -41,7 +52,7 @@ export default function Figures() {
     } finally {
       setLoading(false);
     }
-  }, [effectiveIds]);
+  }, [selectedIds]);
 
   useEffect(() => {
     load();
@@ -51,7 +62,7 @@ export default function Figures() {
     setBusy(true);
     setError(null);
     try {
-      const payload = await api.analyseFigures({ paper_ids: effectiveIds });
+      const payload = await api.analyseFigures({ paper_ids: selectedIds });
       setResult(payload);
       await load();
     } catch (err) {
@@ -77,15 +88,18 @@ export default function Figures() {
         <div>
           <h1>Figures &amp; tables</h1>
           <p className="page-sub">
-            Charts, diagrams and tables lifted out of your papers — and what the vision model
-            reads in them.
+            {selectedIds.length === 0
+              ? 'Select a paper on the right to see the charts, diagrams and tables lifted out of it.'
+              : `Charts, diagrams and tables from ${selectedIds.length} selected paper${
+                  selectedIds.length === 1 ? '' : 's'
+                } — and what the vision model reads in them.`}
           </p>
         </div>
         <button
           type="button"
           className="btn btn-primary"
           onClick={analyse}
-          disabled={busy || pending === 0 || indexedPapers.length === 0}
+          disabled={busy || pending === 0 || selectedIds.length === 0}
         >
           {busy ? 'Reading figures…' : `Read ${pending} figure${pending === 1 ? '' : 's'}`}
         </button>
@@ -156,12 +170,21 @@ export default function Figures() {
 
           {loading ? (
             <Spinner label="Loading figures…" />
+          ) : selectedIds.length === 0 ? (
+            <EmptyState
+              title="No paper selected"
+              description={
+                indexedPapers.length === 0
+                  ? 'Upload a paper containing charts or tables — they are extracted automatically during indexing.'
+                  : 'Choose one or more papers under “Corpus scope” to see their figures and tables.'
+              }
+            />
           ) : visible.length === 0 ? (
             <EmptyState
-              title={figures.length === 0 ? 'No figures found' : 'Nothing matches this filter'}
+              title={figures.length === 0 ? 'No figures in these papers' : 'Nothing matches this filter'}
               description={
                 figures.length === 0
-                  ? 'Upload a paper containing charts or tables — they are extracted automatically during indexing.'
+                  ? 'This paper has no extractable charts or tables. Figures are found by their captions, so a paper without numbered captions yields none.'
                   : 'Try another filter.'
               }
             />

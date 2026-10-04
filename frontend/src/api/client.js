@@ -95,6 +95,8 @@ export const api = {
   discoverRelated: (params) => request(`/api/discover/related${toQuery(params)}`),
   discoverSearch: (params) => request(`/api/discover/search${toQuery(params)}`),
   discoverGaps: (params) => request(`/api/discover/gaps${toQuery(params)}`),
+  // toQuery already repeats array values as separate params, which is what
+  // FastAPI's `list[str] = Query(...)` expects.
 
   // --- literature-based discovery -------------------------------------------
   lbdTerms: (params) => request(`/api/lbd/terms${toQuery(params)}`),

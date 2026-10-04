@@ -328,6 +328,9 @@ class DiscoveryResponse(BaseModel):
     source: str = "openalex"
     candidates: list[dict[str, Any]] = Field(default_factory=list)
     excluded_known: bool = True
+    # Which papers the search was actually based on. "Missing from your corpus"
+    # is meaningless unless you can see what it was compared against.
+    searched_papers: list[str] = Field(default_factory=list)
 
 
 class AgentRunResponse(BaseModel):
