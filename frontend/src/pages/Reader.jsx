@@ -259,7 +259,7 @@ export default function Reader() {
         </div>
 
         <aside className="reader-side">
-          <Card title="Explain a passage">
+          <Card title="Explain a passage" className="explain-card">
             {selection ? (
               <>
                 <blockquote className="reader-selection">{selection.slice(0, 400)}</blockquote>
@@ -287,7 +287,7 @@ export default function Reader() {
             )}
 
             {explanation && (
-              <div className="figure-detail">
+              <div className="figure-detail explain-result">
                 {explanation.explanation ? (
                   <>
                     <p>{explanation.explanation}</p>

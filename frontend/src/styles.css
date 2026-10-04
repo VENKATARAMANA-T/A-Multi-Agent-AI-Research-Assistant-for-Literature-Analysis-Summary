@@ -858,6 +858,43 @@ code,
   color: #475569;
 }
 
+/* The explanation scrolls on its own rather than the whole panel, so the
+   passage you selected, the level tabs and the button stay where they are
+   while you read the answer — scrolling the controls out of reach to get to
+   the bottom of the text is what made this awkward. The `min-height: 0` on
+   each level is what lets a flex child shrink below its content and scroll
+   instead of pushing the card open. */
+.explain-card {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.explain-card > .card-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.explain-result {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding-right: 0.35rem;
+  margin-top: 0.7rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--border);
+}
+
+/* A long selection should not crowd out the answer it belongs to. */
+.explain-card .reader-selection {
+  max-height: 7.5rem;
+  overflow-y: auto;
+  flex: 0 0 auto;
+}
+
 /* --- comparison matrix ------------------------------------------------------ */
 
 .matrix-column-row {
