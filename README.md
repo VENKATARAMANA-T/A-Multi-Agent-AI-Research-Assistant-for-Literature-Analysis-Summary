@@ -406,6 +406,7 @@ Backend settings come from `backend/.env` (see `backend/.env.example`).
 |---|---|---|
 | `GOOGLE_API_KEY` | — | Required for the agents. Ingestion and search work without it. |
 | `GEMINI_MODEL` | `gemini-flash-latest` | Pin a dated id for reproducibility |
+| `GEMINI_FALLBACK_MODELS` | `gemini-flash-lite-latest` | Tried in order when the primary is overloaded or its daily quota is spent. Each model has its own allowance. Empty disables |
 | `OCR_ENABLED` | `true` | Recover text from scanned pages |
 | `OCR_ENGINE` | `auto` | `auto` \| `rapidocr` \| `gemini` \| `none` |
 | `OCR_DPI` | `200` | Raise to 300 for poor scans |
@@ -453,7 +454,7 @@ cd backend
 .venv\Scripts\python -m pytest
 ```
 
-399 tests, no network access required — the suite runs against an isolated temp directory with
+407 tests, no network access required — the suite runs against an isolated temp directory with
 the offline embedder, Neo4j disabled, and a mocked Gemini client.
 
 Coverage:

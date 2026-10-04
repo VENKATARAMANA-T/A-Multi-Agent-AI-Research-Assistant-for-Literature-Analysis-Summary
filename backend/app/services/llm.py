@@ -189,6 +189,9 @@ class GeminiClient:
     ) -> None:
         self.api_key = api_key if api_key is not None else settings.google_api_key
         self.model = model or settings.gemini_model
+        # An explicitly chosen model is honoured as given: a caller asking for
+        # one model should not silently get another.
+        self.fallback_models = [] if model else settings.gemini_model_chain[1:]
         self.temperature = settings.gemini_temperature if temperature is None else temperature
         self._client: Any = None
 
@@ -217,7 +220,7 @@ class GeminiClient:
         wait=wait_exponential(multiplier=2, min=5, max=65),
         reraise=True,
     )
-    def _call(self, contents: Any, config: dict[str, Any]) -> Any:
+    def _call(self, contents: Any, config: dict[str, Any], model: str | None = None) -> Any:
         from google.genai import types
 
         client = self._ensure_client()
@@ -227,7 +230,7 @@ class GeminiClient:
             _rate_limiter.acquire()
             future = _call_pool.submit(
                 client.models.generate_content,
-                model=self.model,
+                model=model or self.model,
                 contents=contents,
                 config=types.GenerateContentConfig(**config),
             )
@@ -242,6 +245,45 @@ class GeminiClient:
                 raise
             except Exception as exc:  # pragma: no cover - network dependent
                 raise classify_provider_error(str(exc)) from exc
+
+    def model_chain(self) -> list[str]:
+        """The models this client will try, in order."""
+        chain = [self.model]
+        for name in self.fallback_models:
+            if name and name not in chain:
+                chain.append(name)
+        return chain
+
+    def _call_with_fallback(self, contents: Any, config: dict[str, Any]) -> tuple[Any, str]:
+        """Try each model in turn when the failure is one a different model can survive.
+
+        Only capacity and quota failures move on. A malformed request or a
+        safety block would fail identically everywhere, and trying again
+        elsewhere would spend a second model's allowance to learn nothing.
+        """
+        chain = self.model_chain()
+        last: LLMError | None = None
+
+        for index, model in enumerate(chain):
+            try:
+                response = self._call(contents, config, model=model)
+            except (TransientLLMError, QuotaExceededError) as exc:
+                last = exc
+                if index + 1 < len(chain):
+                    logger.warning(
+                        "%s could not serve the request (%s); falling back to %s",
+                        model,
+                        summarise_provider_error(str(exc))[:120],
+                        chain[index + 1],
+                    )
+                continue
+
+            if index:
+                logger.info("Request served by fallback model %s", model)
+            return response, model
+
+        assert last is not None  # the loop runs at least once
+        raise last
 
     def generate(
         self,
@@ -289,7 +331,7 @@ class GeminiClient:
         if response_schema:
             config["response_schema"] = response_schema
 
-        response = self._call(prompt, config)
+        response, answered_by = self._call_with_fallback(prompt, config)
         text = (getattr(response, "text", None) or "").strip()
         if not text:
             raise LLMError("Gemini returned an empty response (possibly blocked by a safety filter).")
@@ -297,15 +339,18 @@ class GeminiClient:
         usage = getattr(response, "usage_metadata", None)
         result = LLMResponse(
             text=text,
-            model=self.model,
+            model=answered_by,
             prompt_tokens=int(getattr(usage, "prompt_token_count", 0) or 0),
             output_tokens=int(getattr(usage, "candidates_token_count", 0) or 0),
         )
 
+        # Keyed on the primary model but stored against whichever one answered:
+        # the request is "this prompt", not "this prompt on that model", so a
+        # repeat must hit the cache however the first one was served.
         if use_cache:
             llm_cache.store(
                 key,
-                model=self.model,
+                model=answered_by,
                 response_text=result.text,
                 prompt_tokens=result.prompt_tokens,
                 output_tokens=result.output_tokens,
@@ -351,7 +396,7 @@ class GeminiClient:
             types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
             prompt,
         ]
-        response = self._call(
+        response, answered_by = self._call_with_fallback(
             contents,
             {"temperature": resolved_temperature, "max_output_tokens": resolved_max_tokens},
         )
@@ -361,7 +406,7 @@ class GeminiClient:
             usage = getattr(response, "usage_metadata", None)
             llm_cache.store(
                 key,
-                model=self.model,
+                model=answered_by,
                 response_text=text,
                 prompt_tokens=int(getattr(usage, "prompt_token_count", 0) or 0),
                 output_tokens=int(getattr(usage, "candidates_token_count", 0) or 0),

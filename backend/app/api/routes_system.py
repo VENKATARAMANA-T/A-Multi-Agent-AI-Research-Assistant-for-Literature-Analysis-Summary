@@ -64,6 +64,7 @@ def health(session: Session = Depends(get_session)) -> HealthResponse:
         llm={
             "provider": "google-gemini",
             "model": llm.model,
+            "fallback_models": getattr(llm, "fallback_models", []),
             "configured": llm.available,
             "max_concurrency": settings.llm_max_concurrency,
             "cache": llm_cache.summary(),

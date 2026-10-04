@@ -102,6 +102,14 @@ class Settings(BaseSettings):
     # "gemini-flash-latest" tracks the current Flash model and is the alias with
     # the broadest free-tier availability; pin a dated id for reproducibility.
     gemini_model: str = "gemini-flash-latest"
+    # Models to try when the primary one cannot serve the request. Google
+    # returns UNAVAILABLE ("experiencing high demand") under load and
+    # RESOURCE_EXHAUSTED when the day's free-tier allowance is spent, and
+    # neither clears by retrying the same model — the second is guaranteed not
+    # to, since the daily cap is per model. Each model carries its own quota, so
+    # a second one is the difference between a working afternoon and a dead one.
+    # Comma-separated, tried in order. Empty disables fallback.
+    gemini_fallback_models: str = "gemini-flash-lite-latest"
     gemini_temperature: float = 0.2
     gemini_max_output_tokens: int = 8192
     # Per-request deadline. The google-genai SDK has no client-side timeout, so
@@ -148,6 +156,16 @@ class Settings(BaseSettings):
     @property
     def llm_enabled(self) -> bool:
         return bool(self.google_api_key)
+
+    @property
+    def gemini_model_chain(self) -> list[str]:
+        """The primary model followed by its fallbacks, de-duplicated."""
+        chain = [self.gemini_model.strip()]
+        for name in self.gemini_fallback_models.split(","):
+            name = name.strip()
+            if name and name not in chain:
+                chain.append(name)
+        return [name for name in chain if name]
 
     def ensure_directories(self) -> None:
         for directory in (

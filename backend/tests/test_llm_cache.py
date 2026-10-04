@@ -119,7 +119,7 @@ class CountingClient(GeminiClient):
         super().__init__(api_key="test-key", model="gemini-flash-latest")
         self.calls = 0
 
-    def _call(self, contents, config):  # type: ignore[override]
+    def _call(self, contents, config, model=None):  # type: ignore[override]
         self.calls += 1
 
         class _Response:
