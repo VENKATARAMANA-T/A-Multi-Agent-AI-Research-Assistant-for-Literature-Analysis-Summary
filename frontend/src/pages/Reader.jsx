@@ -8,10 +8,18 @@ import { Badge, Card, ErrorBanner, Spinner } from '../components/common';
 
 // Vite resolves the worker from the installed pdfjs-dist, so the viewer works
 // offline instead of reaching for a CDN.
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString();
+const workerUrl = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url);
+
+// The `v` is a cache-buster, and it has to be here rather than in the filename.
+// This worker was once served with the wrong MIME type (nginx has no entry for
+// .mjs) under `Cache-Control: immutable`, which tells a browser not to
+// revalidate for a year — so every browser that saw the broken response keeps
+// replaying it and the reader stays broken after the server is fixed. The
+// filename's content hash cannot rescue us: the file itself never changed, so
+// the hash is identical. A new query string is the only thing that makes the
+// browser ask again. Bump it if a cached asset ever needs forcing out.
+workerUrl.searchParams.set('v', '2');
+pdfjs.GlobalWorkerOptions.workerSrc = workerUrl.toString();
 
 const LEVELS = [
   ['simple', 'Plain English'],
