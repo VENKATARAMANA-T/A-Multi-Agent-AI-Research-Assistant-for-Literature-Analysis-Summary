@@ -117,6 +117,13 @@ The decision is made **per page, not per document**: papers are frequently born-
 photocopied appendix, and recognising a page whose text layer is already perfect only degrades
 it. A page with no text *and* no images is blank, not scanned, and is skipped.
 
+Image coverage is measured two ways, because the obvious one has a blind spot that lands
+exactly where it hurts. On a page with *no* text at all, PyMuPDF's `get_text("dict")` can
+return no blocks whatsoever — not even the image block — so a full-page scan scores 0.0
+coverage and never reaches OCR. The emptier the page, the more likely it was skipped. A real
+1962 NASA scan lost four pages of typewritten text that way while their neighbours came through
+fine; the page's image list is consulted as a fallback, and there is a regression test.
+
 Reading order is reconstructed rather than assumed — OCR returns boxes in detection order,
 which on a two-column paper interleaves the columns into nonsense. Lines are grouped into
 columns by the widest vertical gutter, then read top-to-bottom within each column.
@@ -446,7 +453,7 @@ cd backend
 .venv\Scripts\python -m pytest
 ```
 
-390 tests, no network access required — the suite runs against an isolated temp directory with
+399 tests, no network access required — the suite runs against an isolated temp directory with
 the offline embedder, Neo4j disabled, and a mocked Gemini client.
 
 Coverage:

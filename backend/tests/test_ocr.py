@@ -310,3 +310,68 @@ def test_health_reports_the_ocr_engine(client):
     assert payload["ocr"]["enabled"] is True
     assert payload["ocr"]["engine"] == "rapidocr"
     assert "cache" in payload["ocr"]
+
+
+# --- the text-dict blind spot -------------------------------------------------
+
+
+class _PageWithEmptyTextDict:
+    """A page whose text dict reports nothing, but which carries a full-page image.
+
+    Real PDFs do this: on a page with no text at all, PyMuPDF's
+    `get_text("dict")` can return no blocks whatsoever — not even the image
+    block. Found on a scanned 1962 NASA report, where four pages of typewritten
+    text were silently dropped because coverage came back 0.0 and OCR was never
+    attempted.
+    """
+
+    def __init__(self, image_rect: fitz.Rect, page_rect: fitz.Rect | None = None):
+        self.rect = page_rect or fitz.Rect(0, 0, 600, 800)
+        self._image_rect = image_rect
+
+    def get_text(self, *_args, **_kwargs):
+        return {"blocks": []}
+
+    def get_images(self, full=False):
+        return [(1, 0, 0, 0, 0, "", "", "", "")]
+
+    def get_image_bbox(self, _item):
+        return self._image_rect
+
+
+def test_coverage_falls_back_when_the_text_dict_is_empty():
+    """The emptier the page, the more it needs OCR — it must not score 0.0."""
+    page = _PageWithEmptyTextDict(fitz.Rect(0, 0, 600, 800))
+    assert image_coverage(page) > 0.9
+
+
+def test_a_page_the_text_dict_cannot_see_still_reaches_ocr():
+    page = _PageWithEmptyTextDict(fitz.Rect(0, 0, 600, 800))
+    assert page_needs_ocr(page, "") is True
+
+
+def test_the_fallback_clips_an_oversized_image_to_the_page():
+    """An image hanging off the edge covers only what is actually on the page."""
+    page = _PageWithEmptyTextDict(fitz.Rect(-900, -900, 1500, 1700))
+    assert image_coverage(page) == pytest.approx(1.0)
+
+
+def test_the_fallback_ignores_an_unusable_bbox():
+    page = _PageWithEmptyTextDict(fitz.Rect(0, 0, 0, 0))
+    assert image_coverage(page) == 0.0
+
+
+def test_a_page_with_no_images_at_all_still_scores_zero():
+    class _Bare(_PageWithEmptyTextDict):
+        def get_images(self, full=False):
+            return []
+
+    assert image_coverage(_Bare(fitz.Rect(0, 0, 600, 800))) == 0.0
+
+
+def test_the_fallback_survives_a_raising_bbox():
+    class _Raises(_PageWithEmptyTextDict):
+        def get_image_bbox(self, _item):
+            raise ValueError("image lives inside a Form XObject")
+
+    assert image_coverage(_Raises(fitz.Rect(0, 0, 600, 800))) == 0.0

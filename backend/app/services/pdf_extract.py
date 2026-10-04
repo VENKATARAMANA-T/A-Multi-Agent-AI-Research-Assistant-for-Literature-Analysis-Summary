@@ -250,20 +250,57 @@ def image_coverage(page: "fitz.Page") -> float:
     Used to tell a scanned page (little text, one big image) apart from a
     genuinely blank one (little text, nothing else) — OCRing the latter is
     wasted work.
+
+    Two detectors, because the first one has a blind spot that lands exactly
+    where it hurts: on a page with *no* text at all, `get_text("dict")` can
+    return no blocks whatsoever — not even the image block — so a full-page
+    scan reports 0.0 coverage and never reaches OCR. The emptier the page, the
+    more likely it was skipped, which is the opposite of what this is for.
+    Found on a 1962 NASA scan where 4 pages of typewritten text were dropped
+    silently while their neighbours came through fine.
     """
     try:
         page_area = abs(page.rect.width * page.rect.height)
         if page_area <= 0:
             return 0.0
+
         covered = 0.0
         for block in page.get_text("dict").get("blocks", []):
             if block.get("type") != 1:  # 1 == image block
                 continue
             x0, y0, x1, y1 = block.get("bbox", (0, 0, 0, 0))
             covered += abs((x1 - x0) * (y1 - y0))
+
+        if covered <= 0:
+            covered = _image_area_from_xrefs(page)
+
         return min(1.0, covered / page_area)
     except Exception:  # pragma: no cover - malformed PDFs
         return 0.0
+
+
+def _image_area_from_xrefs(page: "fitz.Page") -> float:
+    """Image area via the page's image list, for when the text dict is blank.
+
+    `get_image_bbox` can raise on images reached through a Form XObject and can
+    return an infinite rectangle, so each one is taken defensively and clipped
+    to the page: an image hanging off the edge covers only what is on the page.
+    """
+    area = 0.0
+    try:
+        images = page.get_images(full=True)
+    except Exception:  # pragma: no cover - malformed PDFs
+        return 0.0
+
+    for item in images:
+        try:
+            rect = page.get_image_bbox(item)
+        except Exception:
+            continue
+        if not rect or rect.is_empty or rect.is_infinite:
+            continue
+        area += abs(rect & page.rect)
+    return area
 
 
 def page_needs_ocr(page: "fitz.Page", native_text: str) -> bool:
