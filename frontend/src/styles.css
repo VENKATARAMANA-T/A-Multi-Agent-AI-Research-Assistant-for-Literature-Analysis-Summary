@@ -2805,3 +2805,35 @@ code,
   .review-doc { border: none; box-shadow: none; padding: 0; }
   .cite-link { background: none; color: #000; }
 }
+
+/* --- images behind authentication ------------------------------------------- */
+
+/* Holds the slot while the bytes are fetched, so a grid of figures does not
+   reflow as each one lands. */
+.image-placeholder {
+  min-height: 120px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(100deg, var(--surface-alt) 30%, #e9eef5 50%, var(--surface-alt) 70%);
+  background-size: 300% 100%;
+  animation: image-shimmer 1.3s ease-in-out infinite;
+}
+
+@keyframes image-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: 0 0; }
+}
+
+.image-fallback {
+  min-height: 90px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .image-placeholder { animation: none; }
+}

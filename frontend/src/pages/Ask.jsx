@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../api/client';
 import AgentTrace from '../components/AgentTrace';
+import AuthImage from '../components/AuthImage';
 import PaperPicker from '../components/PaperPicker';
 import VerificationBadge from '../components/VerificationBadge';
 import { Badge, Card, ErrorBanner, Spinner, WarningBanner, statusTone } from '../components/common';
@@ -152,11 +153,10 @@ export default function Ask() {
                               </span>
                             </div>
                             {source.kind === 'figure' && source.figure_id && (
-                              <img
+                              <AuthImage
                                 className="source-figure"
                                 src={api.figureImageUrl(source.figure_id)}
                                 alt={source.label || 'Cited figure'}
-                                loading="lazy"
                               />
                             )}
                             <p className="source-excerpt">{source.excerpt}…</p>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import api from '../api/client';
+import AuthImage from '../components/AuthImage';
 import PaperPicker from '../components/PaperPicker';
 import { Badge, Card, EmptyState, ErrorBanner, Spinner, WarningBanner } from '../components/common';
 import { useCorpus } from '../context/CorpusContext';
@@ -212,11 +213,10 @@ export default function Figures() {
                   }
                 >
                   {figure.has_image && (
-                    <img
+                    <AuthImage
                       className="figure-image"
                       src={api.figureImageUrl(figure.id)}
                       alt={figure.caption || figure.label}
-                      loading="lazy"
                     />
                   )}
 
