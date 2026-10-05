@@ -54,8 +54,9 @@ export default function Discover() {
         <div>
           <h1>Discover</h1>
           <p className="page-sub">
-            Find work your corpus is missing. Results come from OpenAlex, an open catalogue of
-            scholarly papers — nothing is added to your library automatically.
+            Find related papers in OpenAlex, an open catalogue of around 250 million works.
+            Anything already in your library is filtered out, and nothing is added to it
+            automatically — download what looks useful and upload it yourself.
           </p>
         </div>
         <button type="button" className="btn btn-primary" onClick={run} disabled={busy}>
