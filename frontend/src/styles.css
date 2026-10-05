@@ -2352,7 +2352,7 @@ code,
   color: var(--text-muted);
 }
 
-/* --- home: brand and the hero reel ------------------------------------------ */
+/* --- home: brand ------------------------------------------------------------ */
 
 /* .brand-name is near-white for the dark sidebar, which made it invisible
    against the light landing page. */
@@ -2360,46 +2360,12 @@ code,
 .home-nav .brand-name { color: var(--text); }
 .home-nav .brand-tag { color: var(--text-muted); }
 
-/* One card on stage at a time: each rises in, holds, then slides down and away.
-   Three cards fanned out statically read as clutter; this way each one is
-   actually looked at, and five fit where three overlapped. */
-.hero-reel {
-  position: relative;
-  min-height: 250px;
-}
-
-.hero-reel .hero-card {
-  position: absolute;
-  inset: 0 0 auto 0;
-  width: 100%;
-  opacity: 0;
-  transform: translateY(-14px) scale(0.97);
-  pointer-events: none;
-  transition: opacity 0.5s ease, transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.hero-reel .hero-card.is-active {
-  opacity: 1;
-  transform: none;
-  pointer-events: auto;
-  z-index: 2;
-}
-
-/* Downwards on the way out, so the motion reads as a reel advancing rather
-   than cards appearing at random. */
-.hero-reel .hero-card.is-leaving {
-  opacity: 0;
-  transform: translateY(26px) scale(0.97);
-  z-index: 1;
-}
-
-.hero-card p { margin: 0 0 0.6rem; font-size: 0.88rem; line-height: 1.5; }
-
 .hero-ocr { color: var(--text-muted); }
 .hero-strike {
   text-decoration: line-through;
   text-decoration-color: var(--danger);
-  opacity: 0.65;
+  opacity: 0.55;
+  letter-spacing: -0.04em;
 }
 
 .hero-meter {
@@ -2407,11 +2373,10 @@ code,
   background: var(--surface-alt);
   border-radius: 999px;
   overflow: hidden;
-  margin-bottom: 0.45rem;
 }
 .hero-meter span { display: block; height: 100%; background: var(--success); border-radius: 999px; }
 
-.hero-chart { width: 100%; height: auto; margin-bottom: 0.4rem; }
+.hero-chart { width: 100%; height: auto; }
 .hero-chart line { stroke: #cbd5e1; stroke-width: 1.5; }
 .hero-chart rect { rx: 2; }
 .hero-chart .b1 { fill: #bfdbfe; }
@@ -2437,10 +2402,127 @@ code,
 }
 .reel-dot.is-active { width: 20px; border-radius: 999px; background: var(--primary); }
 
-/* Hovering holds the current card, so a card cannot slide away mid-sentence. */
+/* Hovering holds the current card, so one cannot fall away mid-sentence. */
 .hero-visual:hover .reel-dot.is-active { background: var(--primary-dark); }
 
+/* --- hero reel: cards dropping through a window ----------------------------- */
+
+/* A fixed window the cards fall through. The height is set here rather than by
+   the tallest card, so the page never twitches as the content changes. */
+.hero-reel {
+  position: relative;
+  height: 264px;
+  overflow: hidden;
+  /* Room for the card's own shadow, which would otherwise be sheared off at
+     the window edge and spoil the illusion of depth. */
+  padding: 14px 16px;
+  margin: -14px -16px;
+}
+
+.hero-reel .hero-card {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  right: 16px;
+  /* Every card the same size: the reel is one object changing its face, not a
+     stack of differently shaped things. */
+  height: 236px;
+  display: flex;
+  flex-direction: column;
+  padding: 1.1rem 1.2rem;
+  will-change: transform, opacity;
+}
+
+/* Waiting above the window. No transition, so a card that has just fallen can
+   be lifted back to the top without visibly flying up through the stage. */
+.hero-reel .hero-card.is-waiting {
+  transform: translateY(-150%);
+  opacity: 0;
+  pointer-events: none;
+  transition: none;
+}
+
+/* Landing: slightly overshoots and settles, the way a dropped thing does. */
+.hero-reel .hero-card.is-active {
+  transform: translateY(0);
+  opacity: 1;
+  z-index: 2;
+  transition:
+    transform 0.7s cubic-bezier(0.22, 1.25, 0.4, 1),
+    opacity 0.32s ease-out;
+}
+
+/* Falling away: accelerates, because gravity does. */
+.hero-reel .hero-card.is-leaving {
+  transform: translateY(150%);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 1;
+  transition:
+    transform 0.62s cubic-bezier(0.5, 0, 0.9, 0.4),
+    opacity 0.5s ease-in;
+}
+
+.reel-title {
+  margin: 0.1rem 0 0.7rem;
+  font-size: 1.02rem;
+  letter-spacing: -0.01em;
+}
+
+/* Takes the slack so the footer sits on the baseline of every card, whatever
+   the body happens to be. */
+.reel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.55rem;
+}
+
+.reel-quote {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.reel-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--border);
+}
+
+.reel-stat { font-size: 0.82rem; color: var(--text); }
+.reel-foot-note { font-size: 0.74rem; color: var(--text-muted); }
+
+.hero-card-head {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--primary);
+}
+
+.hero-chart-label {
+  font-size: 8px;
+  fill: var(--text-muted);
+}
+
+.hero-verdicts { gap: 0.35rem; }
+
 @media (prefers-reduced-motion: reduce) {
-  .hero-reel .hero-card { transition: opacity 0.2s linear; transform: none; }
-  .hero-reel .hero-card.is-leaving { transform: none; }
+  .hero-reel .hero-card.is-active,
+  .hero-reel .hero-card.is-leaving {
+    transform: none;
+    transition: opacity 0.25s linear;
+  }
+  .hero-reel .hero-card.is-waiting { transform: none; }
+}
+
+@media (max-width: 960px) {
+  .hero-reel { height: 248px; }
+  .hero-reel .hero-card { height: 220px; }
 }

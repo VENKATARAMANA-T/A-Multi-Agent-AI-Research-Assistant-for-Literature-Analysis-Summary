@@ -1,165 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-
-// Each card holds the stage for three seconds before the next one takes over.
-const REEL_INTERVAL_MS = 3000;
-
-const REEL = [
-  {
-    key: 'qa',
-    head: 'Question Answering Agent',
-    body: (
-      <>
-        <p>
-          SparseSum reaches 44.1 ROUGE-L on arXiv <span className="hero-cite">[S1]</span>,
-          outperforming the dense baseline <span className="hero-cite">[S2]</span>.
-        </p>
-        <div className="hero-chip">high confidence</div>
-      </>
-    ),
-  },
-  {
-    key: 'verify',
-    head: 'Verification',
-    body: (
-      <>
-        <div className="hero-verdicts">
-          <span className="hero-verdict is-ok">Supported</span>
-          <span className="hero-verdict is-ok">Supported</span>
-          <span className="hero-verdict is-bad">Unsupported</span>
-        </div>
-        <div className="hero-score">75% grounded · 4 claims checked</div>
-      </>
-    ),
-  },
-  {
-    key: 'graph',
-    head: 'Knowledge graph',
-    body: (
-      <>
-        <svg viewBox="0 0 220 110" className="hero-graph">
-          <line x1="40" y1="30" x2="110" y2="60" />
-          <line x1="110" y1="60" x2="180" y2="28" />
-          <line x1="110" y1="60" x2="95" y2="98" />
-          <line x1="40" y1="30" x2="180" y2="28" />
-          <circle cx="40" cy="30" r="9" className="n-method" />
-          <circle cx="110" cy="60" r="11" className="n-dataset" />
-          <circle cx="180" cy="28" r="9" className="n-method" />
-          <circle cx="95" cy="98" r="7" className="n-metric" />
-        </svg>
-        <div className="hero-score">84 entities · 141 relationships</div>
-      </>
-    ),
-  },
-  {
-    key: 'ocr',
-    head: 'OCR · scanned pages',
-    body: (
-      <>
-        <p className="hero-ocr">
-          <span className="hero-strike">the acceleration spectrum of the</span> vibrational field
-          is related to the pressure spectrum
-        </p>
-        <div className="hero-meter">
-          <span style={{ width: '82%' }} />
-        </div>
-        <div className="hero-score">16 of 28 pages recovered · 0.82 confidence</div>
-      </>
-    ),
-  },
-  {
-    key: 'figures',
-    head: 'Figures read by vision',
-    body: (
-      <>
-        <svg viewBox="0 0 220 96" className="hero-chart">
-          <line x1="22" y1="86" x2="212" y2="86" />
-          <line x1="22" y1="86" x2="22" y2="8" />
-          <rect x="44" y="52" width="34" height="34" className="b1" />
-          <rect x="94" y="34" width="34" height="52" className="b2" />
-          <rect x="144" y="16" width="34" height="70" className="b3" />
-        </svg>
-        <div className="hero-score">wav2vec reaches 0.93 — highest of the three</div>
-      </>
-    ),
-  },
-];
-
-/**
- * A reel of five cards: one on stage at a time, each sliding down and away as
- * the next rises into its place.
- *
- * Three cards fanned out statically looked like a screenshot of clutter. One at
- * a time means each gets read, and five fit where three overlapped.
- */
-function HeroReel() {
-  const [index, setIndex] = useState(0);
-  const [leaving, setLeaving] = useState(null);
-  const [paused, setPaused] = useState(false);
-  const timer = useRef(null);
-
-  const advance = (next) => {
-    setLeaving((current) => (current === null ? index : current));
-    setIndex(next);
-  };
-
-  useEffect(() => {
-    if (paused) return undefined;
-    timer.current = setInterval(() => {
-      setLeaving(null);
-      setIndex((current) => {
-        setLeaving(current);
-        return (current + 1) % REEL.length;
-      });
-    }, REEL_INTERVAL_MS);
-    return () => clearInterval(timer.current);
-  }, [paused]);
-
-  // The outgoing card is only kept mounted long enough to animate out.
-  useEffect(() => {
-    if (leaving === null) return undefined;
-    const id = setTimeout(() => setLeaving(null), 650);
-    return () => clearTimeout(id);
-  }, [leaving]);
-
-  return (
-    <div
-      className="hero-visual"
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
-    >
-      <div className="hero-reel">
-        {REEL.map((card, i) => (
-          <article
-            key={card.key}
-            className={`hero-card ${
-              i === index ? 'is-active' : i === leaving ? 'is-leaving' : ''
-            }`}
-            aria-hidden={i !== index}
-          >
-            <div className="hero-card-head">{card.head}</div>
-            {card.body}
-          </article>
-        ))}
-      </div>
-
-      <div className="reel-dots" role="tablist" aria-label="Feature preview">
-        {REEL.map((card, i) => (
-          <button
-            key={card.key}
-            type="button"
-            role="tab"
-            aria-selected={i === index}
-            aria-label={card.head}
-            className={`reel-dot ${i === index ? 'is-active' : ''}`}
-            onClick={() => advance(i)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
 
 const PILLARS = [
   {
@@ -200,6 +41,208 @@ const STEPS = [
   ['Analyse', 'Eight specialised agents summarise, extract, compare, map and fact-check.'],
   ['Report', 'Export a literature review as Markdown or PDF, with every claim traceable.'],
 ];
+
+// How long each card holds the stage before the next one drops in.
+const REEL_INTERVAL_MS = 4000;
+// Must match the CSS transition, so the outgoing card is unmounted from the
+// stage only once it has finished falling.
+const DROP_MS = 700;
+
+const REEL = [
+  {
+    key: 'qa',
+    head: 'Ask',
+    title: 'Answers you can trace',
+    body: (
+      <p className="reel-quote">
+        SparseSum reaches <strong>44.1 ROUGE-L</strong> on arXiv{' '}
+        <span className="hero-cite">[S1]</span>, outperforming the dense baseline by 2.3
+        points <span className="hero-cite">[S2]</span>.
+      </p>
+    ),
+    foot: (
+      <>
+        <span className="hero-chip">high confidence</span>
+        <span className="reel-foot-note">every marker opens the page it came from</span>
+      </>
+    ),
+  },
+  {
+    key: 'verify',
+    head: 'Verify',
+    title: 'It checks its own work',
+    body: (
+      <>
+        <div className="hero-verdicts">
+          <span className="hero-verdict is-ok">Supported</span>
+          <span className="hero-verdict is-ok">Supported</span>
+          <span className="hero-verdict is-ok">Supported</span>
+          <span className="hero-verdict is-bad">Unsupported</span>
+        </div>
+        <div className="hero-meter">
+          <span style={{ width: '75%' }} />
+        </div>
+      </>
+    ),
+    foot: (
+      <>
+        <strong className="reel-stat">75% grounded</strong>
+        <span className="reel-foot-note">evidence re-retrieved for each claim</span>
+      </>
+    ),
+  },
+  {
+    key: 'graph',
+    head: 'Connect',
+    title: 'Relationships, not just passages',
+    body: (
+      <svg viewBox="0 0 240 92" className="hero-graph" role="img" aria-label="Knowledge graph">
+        <line x1="36" y1="24" x2="118" y2="52" />
+        <line x1="118" y1="52" x2="204" y2="22" />
+        <line x1="118" y1="52" x2="96" y2="82" />
+        <line x1="36" y1="24" x2="204" y2="22" />
+        <line x1="204" y1="22" x2="96" y2="82" />
+        <circle cx="36" cy="24" r="9" className="n-method" />
+        <circle cx="118" cy="52" r="12" className="n-dataset" />
+        <circle cx="204" cy="22" r="9" className="n-method" />
+        <circle cx="96" cy="82" r="7" className="n-metric" />
+      </svg>
+    ),
+    foot: (
+      <>
+        <strong className="reel-stat">84 entities · 141 links</strong>
+        <span className="reel-foot-note">answers no single passage contains</span>
+      </>
+    ),
+  },
+  {
+    key: 'ocr',
+    head: 'Recover',
+    title: 'Scans become searchable',
+    body: (
+      <>
+        <p className="reel-quote hero-ocr">
+          <span className="hero-strike">▚▚▚ ▚▚▚▚▚▚▚▚ ▚▚▚▚▚▚</span> the acceleration spectrum
+          of the vibrational field is related to the pressure spectrum
+        </p>
+        <div className="hero-meter">
+          <span style={{ width: '82%' }} />
+        </div>
+      </>
+    ),
+    foot: (
+      <>
+        <strong className="reel-stat">16 of 28 pages</strong>
+        <span className="reel-foot-note">recovered from a 1962 scan · 0.82 confidence</span>
+      </>
+    ),
+  },
+  {
+    key: 'figures',
+    head: 'Read figures',
+    title: 'Charts the text throws away',
+    body: (
+      <svg viewBox="0 0 240 92" className="hero-chart" role="img" aria-label="Accuracy by feature set">
+        <line x1="26" y1="82" x2="232" y2="82" />
+        <line x1="26" y1="82" x2="26" y2="8" />
+        <rect x="52" y="52" width="38" height="30" className="b1" />
+        <rect x="112" y="36" width="38" height="46" className="b2" />
+        <rect x="172" y="16" width="38" height="66" className="b3" />
+        <text x="60" y="94" className="hero-chart-label">MFCC</text>
+        <text x="113" y="94" className="hero-chart-label">spectro</text>
+        <text x="174" y="94" className="hero-chart-label">wav2vec</text>
+      </svg>
+    ),
+    foot: (
+      <>
+        <strong className="reel-stat">0.93 accuracy</strong>
+        <span className="reel-foot-note">read off the plot, then made searchable</span>
+      </>
+    ),
+  },
+];
+
+/**
+ * A reel of cards that drop through a window: the one on stage falls away
+ * downwards while the next lands in its place from above.
+ *
+ * Strictly vertical. A sideways carousel reads as "there is more to the right"
+ * and invites swiping; dropping reads as one thing replacing another, which is
+ * what this is. Every card is the same size so the page does not twitch as the
+ * content changes beneath it.
+ */
+function HeroReel() {
+  const [index, setIndex] = useState(0);
+  const [leaving, setLeaving] = useState(null);
+  const [paused, setPaused] = useState(false);
+  const clear = useRef(null);
+
+  const goTo = useCallback((next) => {
+    setIndex((current) => {
+      if (next === current) return current;
+      setLeaving(current);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (paused) return undefined;
+    const timer = setInterval(
+      () => goTo((index + 1) % REEL.length),
+      REEL_INTERVAL_MS,
+    );
+    return () => clearInterval(timer);
+  }, [paused, index, goTo]);
+
+  // The outgoing card stays mounted on the stage only while it is falling;
+  // afterwards it snaps back above the window with no transition, ready to drop
+  // again on its next turn.
+  useEffect(() => {
+    if (leaving === null) return undefined;
+    clear.current = setTimeout(() => setLeaving(null), DROP_MS);
+    return () => clearTimeout(clear.current);
+  }, [leaving]);
+
+  return (
+    <div
+      className="hero-visual"
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+    >
+      <div className="hero-reel">
+        {REEL.map((card, i) => (
+          <article
+            key={card.key}
+            className={`hero-card ${
+              i === index ? 'is-active' : i === leaving ? 'is-leaving' : 'is-waiting'
+            }`}
+            aria-hidden={i !== index}
+          >
+            <div className="hero-card-head">{card.head}</div>
+            <h3 className="reel-title">{card.title}</h3>
+            <div className="reel-body">{card.body}</div>
+            <div className="reel-foot">{card.foot}</div>
+          </article>
+        ))}
+      </div>
+
+      <div className="reel-dots" role="tablist" aria-label="Feature preview">
+        {REEL.map((card, i) => (
+          <button
+            key={card.key}
+            type="button"
+            role="tab"
+            aria-selected={i === index}
+            aria-label={card.title}
+            className={`reel-dot ${i === index ? 'is-active' : ''}`}
+            onClick={() => goTo(i)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 
 export default function Home() {
   const { isAuthenticated, user } = useAuth();
