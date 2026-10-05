@@ -225,6 +225,14 @@ export const api = {
   graphStats: () => request('/api/graph/stats'),
   clearGraph: () => request('/api/graph', { method: 'DELETE' }),
 
+  // --- literature review ----------------------------------------------------
+  generateReview: (payload) => request('/api/review', { method: 'POST', body: payload }),
+  listReviews: () => request('/api/review'),
+  getReview: (id) => request(`/api/review/${id}`),
+  deleteReview: (id) => request(`/api/review/${id}`, { method: 'DELETE' }),
+  reviewMarkdownUrl: (id) => `${BASE_URL}/api/review/${id}/markdown`,
+  reviewPdfUrl: (id) => `${BASE_URL}/api/review/${id}/pdf`,
+
   // --- reports --------------------------------------------------------------
   createReport: (payload) => request('/api/reports', { method: 'POST', body: payload }),
   listReports: () => request('/api/reports'),

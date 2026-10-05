@@ -491,6 +491,40 @@ class GraphResponse(BaseModel):
     stats: dict[str, Any] = Field(default_factory=dict)
 
 
+class LiteratureReviewRequest(BaseModel):
+    topic: str = Field(min_length=3, max_length=300)
+    paper_ids: list[str] = Field(default_factory=list)
+    focus: Optional[str] = Field(default=None, max_length=500)
+    save: bool = True
+
+
+class LiteratureReviewResponse(BaseModel):
+    id: Optional[str] = None
+    topic: str
+    status: str = "completed"
+    sections: list[dict[str, Any]] = Field(default_factory=list)
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    markdown: str = ""
+    paper_ids: list[str] = Field(default_factory=list)
+    llm_calls: int = 0
+    duration_ms: int = 0
+    errors: list[str] = Field(default_factory=list)
+    trace: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: Optional[datetime] = None
+
+
+class LiteratureReviewSummary(BaseModel):
+    id: str
+    topic: str
+    title: str
+    paper_ids: list[str] = Field(default_factory=list)
+    section_count: int = 0
+    citation_count: int = 0
+    agent_status: str = "completed"
+    has_pdf: bool = False
+    created_at: datetime
+
+
 class ReportRequest(BaseModel):
     paper_ids: list[str] = Field(default_factory=list)
     title: Optional[str] = Field(default=None, max_length=300)

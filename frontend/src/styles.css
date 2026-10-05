@@ -2509,3 +2509,104 @@ code,
   .hero-reel { height: 300px; }
   .hero-reel .hero-card { height: 272px; }
 }
+
+/* --- literature review ------------------------------------------------------ */
+
+/* Set like a document rather than a dashboard panel: this is meant to be read
+   end to end, and a measure of ~68 characters is where that stays comfortable. */
+.review-doc {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2rem 2.2rem;
+  box-shadow: var(--shadow);
+}
+
+.review-section + .review-section {
+  margin-top: 1.9rem;
+  padding-top: 1.6rem;
+  border-top: 1px solid var(--border);
+}
+
+.review-section h2 {
+  margin: 0 0 0.8rem;
+  font-size: 1.12rem;
+  letter-spacing: -0.01em;
+}
+
+.review-para {
+  margin: 0 0 0.9rem;
+  font-size: 0.93rem;
+  line-height: 1.75;
+  max-width: 68ch;
+}
+
+/* The citation is the point of the feature, so it has to look like something
+   you can follow — but not so loud that it breaks the sentence it sits in. */
+.cite-link {
+  color: var(--primary);
+  font-weight: 600;
+  font-size: 0.82em;
+  text-decoration: none;
+  padding: 0 0.1em;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.cite-link:hover {
+  background: #e0ecff;
+  text-decoration: underline;
+}
+
+.review-references {
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.86rem;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+.review-references li { margin-bottom: 0.5rem; }
+.review-references em { color: var(--text); font-style: normal; font-weight: 600; }
+
+.section-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  line-height: 1.8;
+}
+
+.saved-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.saved-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.saved-open {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.6rem;
+  cursor: pointer;
+}
+.saved-open:hover { background: var(--surface-alt); }
+
+.saved-topic {
+  display: block;
+  font-size: 0.84rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -17,6 +17,7 @@ import Profile from './pages/Profile';
 import Reader from './pages/Reader';
 import GraphView from './pages/GraphView';
 import Library from './pages/Library';
+import LiteratureReview from './pages/LiteratureReview';
 import Reports from './pages/Reports';
 import SignIn from './pages/SignIn';
 import SignUp from './pages/SignUp';
@@ -107,6 +108,7 @@ export default function App() {
             <Route path="reader/:paperId" element={<Reader />} />
             <Route path="gaps" element={<Gaps />} />
             <Route path="graph" element={<GraphView />} />
+            <Route path="review" element={<LiteratureReview />} />
             <Route path="reports" element={<Reports />} />
             <Route path="profile" element={<Profile />} />
           </Route>

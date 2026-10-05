@@ -14,6 +14,7 @@ from app.api import (
     routes_papers,
     routes_reader,
     routes_reports,
+    routes_review,
     routes_system,
     routes_verify,
 )
@@ -27,6 +28,7 @@ api_router.include_router(routes_figures.router)
 api_router.include_router(routes_agents.router)
 api_router.include_router(routes_graph.router)
 api_router.include_router(routes_reports.router)
+api_router.include_router(routes_review.router)
 api_router.include_router(routes_reader.router)
 api_router.include_router(routes_matrix.router)
 api_router.include_router(routes_discovery.router)

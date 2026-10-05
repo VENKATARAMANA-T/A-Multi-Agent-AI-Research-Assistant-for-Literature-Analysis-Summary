@@ -352,6 +352,14 @@ class Report(SQLModel, table=True):
     markdown: str = Field(default="", sa_column=Column(Text))
     pdf_path: Optional[str] = None
 
+    # Narrative reviews only. The Markdown above is what gets exported, but the
+    # UI needs the sections and the citation key separately so an [S#] marker can
+    # be rendered as a link to the paper rather than as literal text.
+    topic: Optional[str] = Field(default=None, sa_column=Column(Text))
+    sections: list[Any] = Field(default_factory=list, sa_column=Column(JSON))
+    citations: list[Any] = Field(default_factory=list, sa_column=Column(JSON))
+    llm_calls: int = 0
+
     # Outcome of the agent run behind this report, so a report with empty
     # sections can explain itself instead of looking silently broken.
     agent_status: str = "completed"

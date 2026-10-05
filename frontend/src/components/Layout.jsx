@@ -15,6 +15,7 @@ const NAV = [
   { to: '/app/gaps', label: 'Research Gaps', icon: '◇' },
   { to: '/app/hypotheses', label: 'Hypotheses', icon: '⌁' },
   { to: '/app/graph', label: 'Knowledge Graph', icon: '⁂' },
+  { to: '/app/review', label: 'Literature Review', icon: '✎' },
   { to: '/app/reports', label: 'Reports', icon: '▦' },
 ];
 

@@ -367,6 +367,26 @@ Data created before accounts existed has no owner, and a NULL owner matches
 nobody's query — so a startup task adopts every orphaned row into the first
 account rather than letting the corpus vanish the moment sign-in was switched on.
 
+### Step 8a — Literature Review Generator
+Name a topic, pick your papers, and get a written review in ten sections:
+introduction, research evolution, existing approaches, dataset landscape, method
+comparison, conflicting findings, research gaps, open problems, proposed
+directions, references.
+
+**Three calls, not ten and not one.** One call cannot hold ten sections inside
+the output limit — it truncates somewhere in the middle, usually the part you
+wanted. Ten calls would be thorough and would spend half a free-tier day on one
+document. The sections are written in three groups that genuinely need each
+other's context: what the field is and how it got here, what the evidence says,
+and what is missing. References are the tenth section and cost nothing, built
+from metadata already extracted.
+
+**Citations are resolved, not trusted.** The model is given numbered papers and
+asked to cite them, but `[S12]` from a corpus of nine is a fabrication. Every
+marker is checked against the real list and dropped if it does not resolve, so a
+citation in the finished review always points at a paper that exists — and in
+the UI, at a paper you can click through to.
+
 ### Step 8 — Reports
 A literature review with a corpus table, synthesis, per-paper comparison table, corpus-wide
 dataset/method/metric tables, research gaps, a knowledge-graph summary and references —
@@ -416,7 +436,9 @@ Interactive docs at `/docs`. Highlights:
 | `POST` | `/api/verify` | Fact-check generated text against the corpus |
 | `GET` | `/api/verify` | Past verifications |
 | `GET` | `/api/graph` | Graph for visualisation (filter by paper, type, degree) |
-| `POST` | `/api/reports` | Generate a literature review |
+| `POST` | `/api/review` | Write a ten-section literature review |
+| `GET` | `/api/review/{id}/pdf` | Download the review as PDF |
+| `POST` | `/api/reports` | Generate a structural report |
 | `GET` | `/api/reports/{id}/pdf` | Download PDF |
 | `POST` | `/api/auth/register` | Create an account and email an activation link |
 | `POST` | `/api/auth/activate` | Redeem an activation link |
@@ -484,7 +506,7 @@ cd backend
 .venv\Scripts\python -m pytest
 ```
 
-407 tests, no network access required — the suite runs against an isolated temp directory with
+425 tests, no network access required — the suite runs against an isolated temp directory with
 the offline embedder, Neo4j disabled, and a mocked Gemini client.
 
 Coverage:
