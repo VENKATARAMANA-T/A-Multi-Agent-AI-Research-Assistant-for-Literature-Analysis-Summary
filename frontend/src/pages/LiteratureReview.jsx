@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import ReactMarkdown from 'react-markdown';
 import api from '../api/client';
 import PaperPicker from '../components/PaperPicker';
 import { Badge, Card, EmptyState, ErrorBanner, Spinner, WarningBanner } from '../components/common';
 import { useCorpus } from '../context/CorpusContext';
 import { useFlash } from '../context/FlashContext';
 
-const CITATION_RE = /\[(S\d{1,3})\]/g;
+const CITATION_RE = /\[\s*S(\d{1,3})((?:\s*(?:,|;|&|and)\s*S?\d{1,3})*)\s*\]/gi;
 
 const SUGGESTIONS = [
   'Speech-based detection of neurodevelopmental and speech disorders',
@@ -15,61 +16,88 @@ const SUGGESTIONS = [
 ];
 
 /**
- * Renders a paragraph, turning every [S#] marker into a link to that paper.
+ * Rewrites every [S#] marker as a Markdown link before rendering.
  *
- * The citation is the point of the whole feature — a review you cannot follow
- * back to its sources is just prose — so the markers have to be clickable
- * rather than literal text.
+ * Walking react-markdown's children to find citations means missing every one
+ * that falls inside bold text, a list item or a table cell. Turning the marker
+ * into a link in the source instead lets the Markdown renderer place it, and a
+ * custom `a` component turns that link into a router link — so a citation works
+ * wherever the model happened to put it.
+ *
+ * Grouped citations are split here too, in case an older saved review still
+ * holds "[S2, S3]" from before the backend started splitting them.
  */
-function Cited({ text, byMarker }) {
-  const parts = [];
-  let last = 0;
-  let match;
+function linkifyCitations(markdown) {
+  return markdown.replace(CITATION_RE, (whole, first, rest) => {
+    const numbers = [first, ...(rest || '').match(/\d{1,3}/g) || []];
+    const seen = [];
+    numbers.forEach((n) => {
+      const marker = `S${Number(n)}`;
+      if (!seen.includes(marker)) seen.push(marker);
+    });
+    return seen.map((marker) => `[${marker}](rc-cite:${marker})`).join('');
+  });
+}
 
-  CITATION_RE.lastIndex = 0;
-  while ((match = CITATION_RE.exec(text)) !== null) {
-    if (match.index > last) parts.push(text.slice(last, match.index));
+/** One section's prose, rendered as Markdown with live citations. */
+function Prose({ text, byMarker, lead = false }) {
+  const components = {
+    a({ href, children, ...rest }) {
+      if (!href?.startsWith('rc-cite:')) {
+        return (
+          <a href={href} target="_blank" rel="noreferrer" {...rest}>
+            {children}
+          </a>
+        );
+      }
 
-    const citation = byMarker[match[1]];
-    parts.push(
-      citation ? (
+      const marker = href.slice('rc-cite:'.length);
+      const citation = byMarker[marker];
+      if (!citation) return <span className="cite-dead">[{marker}]</span>;
+
+      return (
         <Link
-          key={`${match[1]}-${match.index}`}
           className="cite-link"
           to={`/app/reader/${citation.paper_id}`}
-          title={citation.title}
+          title={`${citation.title}${citation.year ? ` (${citation.year})` : ''}`}
         >
-          [{match[1]}]
+          {marker}
         </Link>
-      ) : (
-        // Should not happen — the backend drops unresolvable markers — but a
-        // stray one renders as plain text rather than a dead link.
-        <span key={`${match[1]}-${match.index}`}>[{match[1]}]</span>
-      ),
-    );
-    last = match.index + match[0].length;
-  }
+      );
+    },
+  };
 
-  if (last < text.length) parts.push(text.slice(last));
-  return <>{parts}</>;
-}
-
-/** Section prose arrives as Markdown paragraphs; split them and keep the citations live. */
-function Prose({ text, byMarker }) {
   return (
-    <>
-      {text
-        .split(/\n{2,}/)
-        .map((paragraph) => paragraph.trim())
-        .filter(Boolean)
-        .map((paragraph, index) => (
-          <p key={index} className="review-para">
-            <Cited text={paragraph} byMarker={byMarker} />
-          </p>
-        ))}
-    </>
+    <div className={`review-prose ${lead ? 'is-lead' : ''}`}>
+      {/* react-markdown strips URLs whose scheme it does not recognise, which
+          emptied the href on every citation and left fifty dead anchors in the
+          page. The identity transform keeps `rc-cite:` intact; it is safe here
+          because these links are generated from our own markers, never from
+          anything a model or a document supplied. */}
+      <ReactMarkdown components={components} urlTransform={(url) => url}>
+        {linkifyCitations(text)}
+      </ReactMarkdown>
+    </div>
   );
 }
+
+const WORDS_PER_MINUTE = 220;
+
+function readingStats(sections) {
+  const words = sections.reduce(
+    (total, section) => total + section.text.trim().split(/\s+/).filter(Boolean).length,
+    0,
+  );
+  return { words, minutes: Math.max(1, Math.round(words / WORDS_PER_MINUTE)) };
+}
+
+function countCitations(sections) {
+  return sections.reduce((total, section) => {
+    const matches = section.text.match(/\[S\d{1,3}\]/g);
+    return total + (matches ? matches.length : 0);
+  }, 0);
+}
+
 
 export default function LiteratureReview() {
   const { effectiveIds, selectedIds, indexedPapers, llmReady } = useCorpus();
@@ -141,6 +169,7 @@ export default function LiteratureReview() {
   };
 
   const byMarker = Object.fromEntries((review?.citations || []).map((c) => [c.marker, c]));
+  const stats = readingStats(review?.sections || []);
   const papersInScope = selectedIds.length || indexedPapers.length;
 
   return (
@@ -219,29 +248,46 @@ export default function LiteratureReview() {
 
           {review && (
             <>
-              <Card
-                title={`Literature Review: ${review.topic}`}
-                subtitle={`${review.sections.length} sections · ${review.citations.length} papers cited · ${review.llm_calls} API requests`}
-                actions={
-                  <>
+              <article className="review-doc">
+                <header className="review-head">
+                  <span className="review-kicker">Literature review</span>
+                  <h2 className="review-title">{review.topic}</h2>
+
+                  <div className="review-meta">
+                    <span>
+                      <strong>{review.citations.length}</strong> papers
+                    </span>
+                    <span>
+                      <strong>{countCitations(review.sections)}</strong> citations
+                    </span>
+                    <span>
+                      <strong>{stats.words.toLocaleString()}</strong> words
+                    </span>
+                    <span>~{stats.minutes} min read</span>
                     <Badge tone={review.status === 'completed' ? 'success' : 'warning'}>
                       {review.status}
                     </Badge>
+                  </div>
+
+                  <div className="review-actions">
                     {review.id && (
                       <>
                         <a className="btn btn-ghost btn-sm" href={api.reviewMarkdownUrl(review.id)}>
-                          Markdown
+                          ↓ Markdown
                         </a>
                         <a className="btn btn-ghost btn-sm" href={api.reviewPdfUrl(review.id)}>
-                          PDF
+                          ↓ PDF
                         </a>
                       </>
                     )}
-                  </>
-                }
-              >
+                    <span className="review-hint">
+                      Every <span className="cite-link">S1</span> opens that paper in the reader
+                    </span>
+                  </div>
+                </header>
+
                 {review.errors?.length > 0 && (
-                  <div className="callout callout-warning">
+                  <div className="callout callout-warning review-note">
                     <strong>Some sections could not be written.</strong>
                     <ul className="bullets">
                       {review.errors.map((message) => (
@@ -251,33 +297,37 @@ export default function LiteratureReview() {
                   </div>
                 )}
 
-                <p className="muted">
-                  Every <span className="cite-link">[S#]</span> opens that paper in the reader.
-                </p>
-              </Card>
-
-              <article className="review-doc">
-                {review.sections.map((section) => (
-                  <section key={section.key} className="review-section">
-                    <h2>{section.title}</h2>
-                    <Prose text={section.text} byMarker={byMarker} />
+                {review.sections.map((section, index) => (
+                  <section key={section.key} id={`sec-${section.key}`} className="review-section">
+                    <h3 className="review-section-head">
+                      <span className="review-section-number">{index + 1}</span>
+                      {/* The number is already in the badge, so it is stripped
+                          from the title rather than printed twice. */}
+                      {section.title.replace(/^\d+\.\s*/, '')}
+                    </h3>
+                    <Prose text={section.text} byMarker={byMarker} lead={index === 0} />
                   </section>
                 ))}
 
-                <section className="review-section">
-                  <h2>10. References</h2>
+                <section id="sec-references" className="review-section">
+                  <h3 className="review-section-head">
+                    <span className="review-section-number">10</span>
+                    References
+                  </h3>
                   <ol className="review-references">
                     {review.citations.map((citation) => (
-                      <li key={citation.marker}>
+                      <li key={citation.marker} id={`cite-${citation.marker}`}>
                         <Link className="cite-link" to={`/app/reader/${citation.paper_id}`}>
-                          [{citation.marker}]
-                        </Link>{' '}
-                        {(citation.authors || []).slice(0, 3).join(', ')}
-                        {citation.authors?.length > 3 ? ' et al.' : ''}
-                        {citation.year ? ` (${citation.year}). ` : '. '}
-                        <em>{citation.title}</em>
-                        {citation.venue ? `. ${citation.venue}` : ''}
-                        {citation.doi ? ` · doi:${citation.doi}` : ''}
+                          {citation.marker}
+                        </Link>
+                        <span className="reference-body">
+                          {(citation.authors || []).slice(0, 3).join(', ')}
+                          {citation.authors?.length > 3 ? ' et al.' : ''}
+                          {citation.year ? ` (${citation.year}). ` : ' '}
+                          <em>{citation.title}</em>
+                          {citation.venue ? `. ${citation.venue}` : ''}
+                          {citation.doi ? ` · doi:${citation.doi}` : ''}
+                        </span>
                       </li>
                     ))}
                   </ol>
@@ -319,19 +369,32 @@ export default function LiteratureReview() {
             )}
           </Card>
 
-          <Card title="What it writes">
-            <ol className="section-list">
-              <li>Introduction</li>
-              <li>Research Evolution</li>
-              <li>Existing Approaches</li>
-              <li>Dataset Landscape</li>
-              <li>Method Comparison</li>
-              <li>Conflicting Findings</li>
-              <li>Research Gaps</li>
-              <li>Open Problems</li>
-              <li>Proposed Research Directions</li>
-              <li>References</li>
-            </ol>
+          <Card title={review ? 'Contents' : 'What it writes'}>
+            {review ? (
+              <ol className="section-list is-nav">
+                {review.sections.map((section) => (
+                  <li key={section.key}>
+                    <a href={`#sec-${section.key}`}>{section.title.replace(/^\d+\.\s*/, '')}</a>
+                  </li>
+                ))}
+                <li>
+                  <a href="#sec-references">References</a>
+                </li>
+              </ol>
+            ) : (
+              <ol className="section-list">
+                <li>Introduction</li>
+                <li>Research Evolution</li>
+                <li>Existing Approaches</li>
+                <li>Dataset Landscape</li>
+                <li>Method Comparison</li>
+                <li>Conflicting Findings</li>
+                <li>Research Gaps</li>
+                <li>Open Problems</li>
+                <li>Proposed Research Directions</li>
+                <li>References</li>
+              </ol>
+            )}
           </Card>
         </aside>
       </div>

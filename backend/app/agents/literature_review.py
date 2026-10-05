@@ -40,7 +40,14 @@ logger = logging.getLogger(__name__)
 PAPER_BUDGET = 14_000
 MAX_PAPERS = 40
 
-CITATION_RE = re.compile(r"\[S(\d{1,3})\]")
+# Models group citations — "[S2, S3]", "[S1; S4]", "[S2 and S3]" — and a regex
+# that only knows "[S2]" leaves those as literal text, unresolved and unlinked.
+# The first marker carries the S; the rest may not.
+CITATION_RE = re.compile(
+    r"\[\s*S(\d{1,3})((?:\s*(?:,|;|&|and)\s*S?\d{1,3})*)\s*\]",
+    re.IGNORECASE,
+)
+_EXTRA_RE = re.compile(r"S?(\d{1,3})", re.IGNORECASE)
 
 SYSTEM = (
     "You are the Literature Review Agent of ResearchCompass. You write the "
@@ -213,23 +220,33 @@ def schema_for(group: dict[str, Any]) -> dict[str, Any]:
 
 
 def resolve_citations(text: str, citations: list[dict[str, Any]]) -> tuple[str, list[str]]:
-    """Drop markers that point at a paper which was never supplied.
+    """Validate every marker, and split grouped ones into separate citations.
 
-    A model asked to cite will occasionally produce `[S12]` from a corpus of
-    nine. Leaving it in the finished review would be worse than having no
-    citation at all: it looks authoritative and resolves to nothing.
+    Two jobs. A model asked to cite will occasionally produce `[S12]` from a
+    corpus of nine; leaving that in would be worse than having no citation at
+    all, because it looks authoritative and resolves to nothing. And a grouped
+    `[S2, S3]` becomes `[S2][S3]`, so each is independently checkable and —
+    once it reaches the page — independently clickable.
     """
     valid = {item["marker"] for item in citations}
     used: list[str] = []
 
     def replace(match: re.Match) -> str:
-        marker = f"S{int(match.group(1))}"
-        if marker not in valid:
-            logger.info("Dropped a citation to %s, which is not in this corpus", marker)
-            return ""
-        if marker not in used:
-            used.append(marker)
-        return f"[{marker}]"
+        numbers = [match.group(1)]
+        numbers += _EXTRA_RE.findall(match.group(2) or "")
+
+        kept: list[str] = []
+        for number in numbers:
+            marker = f"S{int(number)}"
+            if marker not in valid:
+                logger.info("Dropped a citation to %s, which is not in this corpus", marker)
+                continue
+            if marker not in used:
+                used.append(marker)
+            if marker not in kept:
+                kept.append(marker)
+
+        return "".join(f"[{marker}]" for marker in kept)
 
     cleaned = CITATION_RE.sub(replace, text)
     # Tidy the spacing a dropped marker leaves behind.
