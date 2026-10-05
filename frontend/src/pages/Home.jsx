@@ -1,5 +1,165 @@
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+
+// Each card holds the stage for three seconds before the next one takes over.
+const REEL_INTERVAL_MS = 3000;
+
+const REEL = [
+  {
+    key: 'qa',
+    head: 'Question Answering Agent',
+    body: (
+      <>
+        <p>
+          SparseSum reaches 44.1 ROUGE-L on arXiv <span className="hero-cite">[S1]</span>,
+          outperforming the dense baseline <span className="hero-cite">[S2]</span>.
+        </p>
+        <div className="hero-chip">high confidence</div>
+      </>
+    ),
+  },
+  {
+    key: 'verify',
+    head: 'Verification',
+    body: (
+      <>
+        <div className="hero-verdicts">
+          <span className="hero-verdict is-ok">Supported</span>
+          <span className="hero-verdict is-ok">Supported</span>
+          <span className="hero-verdict is-bad">Unsupported</span>
+        </div>
+        <div className="hero-score">75% grounded · 4 claims checked</div>
+      </>
+    ),
+  },
+  {
+    key: 'graph',
+    head: 'Knowledge graph',
+    body: (
+      <>
+        <svg viewBox="0 0 220 110" className="hero-graph">
+          <line x1="40" y1="30" x2="110" y2="60" />
+          <line x1="110" y1="60" x2="180" y2="28" />
+          <line x1="110" y1="60" x2="95" y2="98" />
+          <line x1="40" y1="30" x2="180" y2="28" />
+          <circle cx="40" cy="30" r="9" className="n-method" />
+          <circle cx="110" cy="60" r="11" className="n-dataset" />
+          <circle cx="180" cy="28" r="9" className="n-method" />
+          <circle cx="95" cy="98" r="7" className="n-metric" />
+        </svg>
+        <div className="hero-score">84 entities · 141 relationships</div>
+      </>
+    ),
+  },
+  {
+    key: 'ocr',
+    head: 'OCR · scanned pages',
+    body: (
+      <>
+        <p className="hero-ocr">
+          <span className="hero-strike">the acceleration spectrum of the</span> vibrational field
+          is related to the pressure spectrum
+        </p>
+        <div className="hero-meter">
+          <span style={{ width: '82%' }} />
+        </div>
+        <div className="hero-score">16 of 28 pages recovered · 0.82 confidence</div>
+      </>
+    ),
+  },
+  {
+    key: 'figures',
+    head: 'Figures read by vision',
+    body: (
+      <>
+        <svg viewBox="0 0 220 96" className="hero-chart">
+          <line x1="22" y1="86" x2="212" y2="86" />
+          <line x1="22" y1="86" x2="22" y2="8" />
+          <rect x="44" y="52" width="34" height="34" className="b1" />
+          <rect x="94" y="34" width="34" height="52" className="b2" />
+          <rect x="144" y="16" width="34" height="70" className="b3" />
+        </svg>
+        <div className="hero-score">wav2vec reaches 0.93 — highest of the three</div>
+      </>
+    ),
+  },
+];
+
+/**
+ * A reel of five cards: one on stage at a time, each sliding down and away as
+ * the next rises into its place.
+ *
+ * Three cards fanned out statically looked like a screenshot of clutter. One at
+ * a time means each gets read, and five fit where three overlapped.
+ */
+function HeroReel() {
+  const [index, setIndex] = useState(0);
+  const [leaving, setLeaving] = useState(null);
+  const [paused, setPaused] = useState(false);
+  const timer = useRef(null);
+
+  const advance = (next) => {
+    setLeaving((current) => (current === null ? index : current));
+    setIndex(next);
+  };
+
+  useEffect(() => {
+    if (paused) return undefined;
+    timer.current = setInterval(() => {
+      setLeaving(null);
+      setIndex((current) => {
+        setLeaving(current);
+        return (current + 1) % REEL.length;
+      });
+    }, REEL_INTERVAL_MS);
+    return () => clearInterval(timer.current);
+  }, [paused]);
+
+  // The outgoing card is only kept mounted long enough to animate out.
+  useEffect(() => {
+    if (leaving === null) return undefined;
+    const id = setTimeout(() => setLeaving(null), 650);
+    return () => clearTimeout(id);
+  }, [leaving]);
+
+  return (
+    <div
+      className="hero-visual"
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+    >
+      <div className="hero-reel">
+        {REEL.map((card, i) => (
+          <article
+            key={card.key}
+            className={`hero-card ${
+              i === index ? 'is-active' : i === leaving ? 'is-leaving' : ''
+            }`}
+            aria-hidden={i !== index}
+          >
+            <div className="hero-card-head">{card.head}</div>
+            {card.body}
+          </article>
+        ))}
+      </div>
+
+      <div className="reel-dots" role="tablist" aria-label="Feature preview">
+        {REEL.map((card, i) => (
+          <button
+            key={card.key}
+            type="button"
+            role="tab"
+            aria-selected={i === index}
+            aria-label={card.head}
+            className={`reel-dot ${i === index ? 'is-active' : ''}`}
+            onClick={() => advance(i)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 const PILLARS = [
   {
@@ -114,40 +274,7 @@ export default function Home() {
           </p>
         </div>
 
-        <div className="hero-visual" aria-hidden="true">
-          <div className="hero-card hero-card-1">
-            <div className="hero-card-head">Question Answering Agent</div>
-            <p>
-              SparseSum reaches 44.1 ROUGE-L on arXiv <span className="hero-cite">[S1]</span>,
-              outperforming the dense baseline <span className="hero-cite">[S2]</span>.
-            </p>
-            <div className="hero-chip">high confidence</div>
-          </div>
-
-          <div className="hero-card hero-card-2">
-            <div className="hero-card-head">Verification</div>
-            <div className="hero-verdicts">
-              <span className="hero-verdict is-ok">Supported</span>
-              <span className="hero-verdict is-ok">Supported</span>
-              <span className="hero-verdict is-bad">Unsupported</span>
-            </div>
-            <div className="hero-score">75% grounded · 4 claims checked</div>
-          </div>
-
-          <div className="hero-card hero-card-3">
-            <div className="hero-card-head">Knowledge graph</div>
-            <svg viewBox="0 0 220 110" className="hero-graph">
-              <line x1="40" y1="30" x2="110" y2="60" />
-              <line x1="110" y1="60" x2="180" y2="28" />
-              <line x1="110" y1="60" x2="95" y2="98" />
-              <line x1="40" y1="30" x2="180" y2="28" />
-              <circle cx="40" cy="30" r="9" className="n-method" />
-              <circle cx="110" cy="60" r="11" className="n-dataset" />
-              <circle cx="180" cy="28" r="9" className="n-method" />
-              <circle cx="95" cy="98" r="7" className="n-metric" />
-            </svg>
-          </div>
-        </div>
+        <HeroReel />
       </section>
 
       <section className="home-section">

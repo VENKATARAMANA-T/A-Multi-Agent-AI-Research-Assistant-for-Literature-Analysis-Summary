@@ -2202,7 +2202,7 @@ code,
 .hero-visual { position: relative; min-height: 380px; }
 
 .hero-card {
-  position: absolute;
+  position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -2219,8 +2219,6 @@ code,
   margin-bottom: 0.5rem;
 }
 
-.hero-card-1 { top: 0; left: 0; width: 82%; }
-.hero-card-1 p { margin: 0 0 0.6rem; font-size: 0.88rem; line-height: 1.5; }
 .hero-cite { color: var(--primary); font-weight: 600; }
 
 .hero-chip {
@@ -2233,7 +2231,6 @@ code,
   font-weight: 600;
 }
 
-.hero-card-2 { top: 42%; right: 0; width: 70%; }
 .hero-verdicts { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.5rem; }
 
 .hero-verdict {
@@ -2246,7 +2243,6 @@ code,
 .hero-verdict.is-bad { background: #fee2e2; color: #991b1b; }
 .hero-score { font-size: 0.74rem; color: var(--text-muted); }
 
-.hero-card-3 { bottom: 0; left: 4%; width: 60%; }
 .hero-graph { width: 100%; height: auto; }
 .hero-graph line { stroke: #cbd5e1; stroke-width: 1.6; }
 .hero-graph circle { stroke: #fff; stroke-width: 2; }
@@ -2354,4 +2350,97 @@ code,
   justify-content: space-between;
   font-size: 0.82rem;
   color: var(--text-muted);
+}
+
+/* --- home: brand and the hero reel ------------------------------------------ */
+
+/* .brand-name is near-white for the dark sidebar, which made it invisible
+   against the light landing page. */
+.home-nav .brand { padding-bottom: 0; }
+.home-nav .brand-name { color: var(--text); }
+.home-nav .brand-tag { color: var(--text-muted); }
+
+/* One card on stage at a time: each rises in, holds, then slides down and away.
+   Three cards fanned out statically read as clutter; this way each one is
+   actually looked at, and five fit where three overlapped. */
+.hero-reel {
+  position: relative;
+  min-height: 250px;
+}
+
+.hero-reel .hero-card {
+  position: absolute;
+  inset: 0 0 auto 0;
+  width: 100%;
+  opacity: 0;
+  transform: translateY(-14px) scale(0.97);
+  pointer-events: none;
+  transition: opacity 0.5s ease, transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.hero-reel .hero-card.is-active {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  z-index: 2;
+}
+
+/* Downwards on the way out, so the motion reads as a reel advancing rather
+   than cards appearing at random. */
+.hero-reel .hero-card.is-leaving {
+  opacity: 0;
+  transform: translateY(26px) scale(0.97);
+  z-index: 1;
+}
+
+.hero-card p { margin: 0 0 0.6rem; font-size: 0.88rem; line-height: 1.5; }
+
+.hero-ocr { color: var(--text-muted); }
+.hero-strike {
+  text-decoration: line-through;
+  text-decoration-color: var(--danger);
+  opacity: 0.65;
+}
+
+.hero-meter {
+  height: 5px;
+  background: var(--surface-alt);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 0.45rem;
+}
+.hero-meter span { display: block; height: 100%; background: var(--success); border-radius: 999px; }
+
+.hero-chart { width: 100%; height: auto; margin-bottom: 0.4rem; }
+.hero-chart line { stroke: #cbd5e1; stroke-width: 1.5; }
+.hero-chart rect { rx: 2; }
+.hero-chart .b1 { fill: #bfdbfe; }
+.hero-chart .b2 { fill: #60a5fa; }
+.hero-chart .b3 { fill: var(--primary); }
+
+.reel-dots {
+  display: flex;
+  justify-content: center;
+  gap: 0.4rem;
+  margin-top: 1rem;
+}
+
+.reel-dot {
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #cbd5e1;
+  cursor: pointer;
+  transition: width 0.3s ease, background 0.3s ease;
+}
+.reel-dot.is-active { width: 20px; border-radius: 999px; background: var(--primary); }
+
+/* Hovering holds the current card, so a card cannot slide away mid-sentence. */
+.hero-visual:hover .reel-dot.is-active { background: var(--primary-dark); }
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-reel .hero-card { transition: opacity 0.2s linear; transform: none; }
+  .hero-reel .hero-card.is-leaving { transform: none; }
 }

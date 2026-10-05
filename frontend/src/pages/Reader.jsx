@@ -3,7 +3,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
-import api from '../api/client';
+import api, { getAccessToken } from '../api/client';
 import { Badge, Card, ErrorBanner, Spinner } from '../components/common';
 
 // Vite resolves the worker from the installed pdfjs-dist, so the viewer works
@@ -48,6 +48,41 @@ export default function Reader() {
   const pageRef = useRef(null);
   const containerRef = useRef(null);
   const chunkId = params.get('chunk');
+
+  /**
+   * PDF.js fetches the file itself, outside our API client, so the bearer token
+   * has to be handed to it explicitly — otherwise every paper fails with a 401
+   * now that the endpoint belongs to an account.
+   *
+   * Memoised because react-pdf treats a new `file` object as a new document: an
+   * inline literal would be a fresh reference on every render and the viewer
+   * would reload the PDF endlessly.
+   */
+  const pdfSource = useMemo(
+    () => ({
+      url: api.paperFileUrl(paperId),
+      httpHeaders: { Authorization: `Bearer ${getAccessToken()}` },
+    }),
+    [paperId],
+  );
+
+  /** Opens the original in a new tab, which also cannot send our header. */
+  const openOriginal = useCallback(async () => {
+    try {
+      const response = await fetch(api.paperFileUrl(paperId), {
+        headers: { Authorization: `Bearer ${getAccessToken()}` },
+      });
+      if (!response.ok) throw new Error(`The server refused the file (${response.status}).`);
+
+      // A blob URL carries no headers, so the new tab needs no credentials.
+      const url = URL.createObjectURL(await response.blob());
+      window.open(url, '_blank', 'noopener');
+      // Revoked late: revoking immediately can race the tab's own load.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [paperId]);
   const figureId = params.get('figure');
 
   /* Measure the rendered canvas rather than trusting the render callback's
@@ -172,9 +207,9 @@ export default function Reader() {
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => copyCitation('apa')}>
             Copy APA
           </button>
-          <a className="btn btn-ghost btn-sm" href={api.paperFileUrl(paperId)} target="_blank" rel="noreferrer">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={openOriginal}>
             Original
-          </a>
+          </button>
         </div>
       </header>
 
@@ -229,7 +264,7 @@ export default function Reader() {
 
           <div className="reader-canvas" onMouseUp={onSelect} ref={containerRef}>
             <Document
-              file={api.paperFileUrl(paperId)}
+              file={pdfSource}
               onLoadSuccess={({ numPages: total }) => setNumPages(total)}
               onLoadError={(err) => setError(`Could not open the PDF: ${err.message}`)}
               loading={<Spinner label="Loading PDF…" />}
