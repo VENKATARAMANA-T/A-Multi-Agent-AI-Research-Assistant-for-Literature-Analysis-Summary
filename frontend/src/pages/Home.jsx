@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
@@ -43,7 +43,7 @@ const STEPS = [
 ];
 
 // How long each card holds the stage before the next one drops in.
-const REEL_INTERVAL_MS = 4000;
+const REEL_INTERVAL_MS = 3000;
 // Must match the CSS transition, so the outgoing card is unmounted from the
 // stage only once it has finished falling.
 const DROP_MS = 700;
@@ -177,22 +177,16 @@ function HeroReel() {
   const [paused, setPaused] = useState(false);
   const clear = useRef(null);
 
-  const goTo = useCallback((next) => {
-    setIndex((current) => {
-      if (next === current) return current;
-      setLeaving(current);
-      return next;
-    });
-  }, []);
-
   useEffect(() => {
     if (paused) return undefined;
-    const timer = setInterval(
-      () => goTo((index + 1) % REEL.length),
-      REEL_INTERVAL_MS,
-    );
+    const timer = setInterval(() => {
+      setIndex((current) => {
+        setLeaving(current);
+        return (current + 1) % REEL.length;
+      });
+    }, REEL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [paused, index, goTo]);
+  }, [paused]);
 
   // The outgoing card stays mounted on the stage only while it is falling;
   // afterwards it snaps back above the window with no transition, ready to drop
@@ -226,19 +220,6 @@ function HeroReel() {
         ))}
       </div>
 
-      <div className="reel-dots" role="tablist" aria-label="Feature preview">
-        {REEL.map((card, i) => (
-          <button
-            key={card.key}
-            type="button"
-            role="tab"
-            aria-selected={i === index}
-            aria-label={card.title}
-            className={`reel-dot ${i === index ? 'is-active' : ''}`}
-            onClick={() => goTo(i)}
-          />
-        ))}
-      </div>
     </div>
   );
 }

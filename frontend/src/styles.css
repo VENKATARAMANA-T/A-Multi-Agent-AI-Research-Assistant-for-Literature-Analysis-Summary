@@ -2199,7 +2199,9 @@ code,
 .hero-actions { display: flex; flex-wrap: wrap; gap: 0.7rem; }
 .hero-note { margin: 1.1rem 0 0; font-size: 0.8rem; color: var(--text-muted); }
 
-.hero-visual { position: relative; min-height: 380px; }
+/* No min-height: the reel sets its own, and a taller box than the reel left the
+   card riding 38px above the headline it is meant to sit level with. */
+.hero-visual { position: relative; }
 
 .hero-card {
   position: relative;
@@ -2383,35 +2385,16 @@ code,
 .hero-chart .b2 { fill: #60a5fa; }
 .hero-chart .b3 { fill: var(--primary); }
 
-.reel-dots {
-  display: flex;
-  justify-content: center;
-  gap: 0.4rem;
-  margin-top: 1rem;
-}
-
-.reel-dot {
-  width: 7px;
-  height: 7px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: #cbd5e1;
-  cursor: pointer;
-  transition: width 0.3s ease, background 0.3s ease;
-}
-.reel-dot.is-active { width: 20px; border-radius: 999px; background: var(--primary); }
-
-/* Hovering holds the current card, so one cannot fall away mid-sentence. */
-.hero-visual:hover .reel-dot.is-active { background: var(--primary-dark); }
 
 /* --- hero reel: cards dropping through a window ----------------------------- */
 
 /* A fixed window the cards fall through. The height is set here rather than by
-   the tallest card, so the page never twitches as the content changes. */
+   the tallest card, so the page never twitches as the content changes. The
+   grid above centres this column against the headline, so the card sits level
+   with the text rather than riding at the top of the section. */
 .hero-reel {
   position: relative;
-  height: 264px;
+  height: 332px;
   overflow: hidden;
   /* Room for the card's own shadow, which would otherwise be sheared off at
      the window edge and spoil the illusion of depth. */
@@ -2426,10 +2409,10 @@ code,
   right: 16px;
   /* Every card the same size: the reel is one object changing its face, not a
      stack of differently shaped things. */
-  height: 236px;
+  height: 304px;
   display: flex;
   flex-direction: column;
-  padding: 1.1rem 1.2rem;
+  padding: 1.4rem 1.5rem;
   will-change: transform, opacity;
 }
 
@@ -2464,8 +2447,8 @@ code,
 }
 
 .reel-title {
-  margin: 0.1rem 0 0.7rem;
-  font-size: 1.02rem;
+  margin: 0.25rem 0 0.9rem;
+  font-size: 1.12rem;
   letter-spacing: -0.01em;
 }
 
@@ -2482,8 +2465,8 @@ code,
 
 .reel-quote {
   margin: 0;
-  font-size: 0.88rem;
-  line-height: 1.55;
+  font-size: 0.94rem;
+  line-height: 1.6;
 }
 
 .reel-foot {
@@ -2523,6 +2506,6 @@ code,
 }
 
 @media (max-width: 960px) {
-  .hero-reel { height: 248px; }
-  .hero-reel .hero-card { height: 220px; }
+  .hero-reel { height: 300px; }
+  .hero-reel .hero-card { height: 272px; }
 }
