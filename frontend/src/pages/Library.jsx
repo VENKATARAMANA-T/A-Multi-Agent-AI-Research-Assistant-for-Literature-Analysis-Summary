@@ -172,21 +172,6 @@ export default function Library() {
                 <span>{paper.chunk_count} chunks</span>
                 <span>{(paper.char_count / 1000).toFixed(1)}k characters</span>
                 <span>{(paper.size_bytes / 1048576).toFixed(2)} MB</span>
-                {paper.text_source !== 'native' && (
-                  <span
-                    className="ocr-flag"
-                    title={
-                      `Text on ${paper.ocr_pages?.length ?? 0} page(s) was recovered by OCR` +
-                      `${paper.ocr_engine ? ` using ${paper.ocr_engine}` : ''}. ` +
-                      'Recognised text can contain errors.'
-                    }
-                  >
-                    ⌾ {paper.text_source === 'ocr' ? 'OCR' : 'Partly OCR'}
-                    {paper.ocr_confidence
-                      ? ` · ${Math.round(paper.ocr_confidence * 100)}% confidence`
-                      : ''}
-                  </span>
-                )}
                 {paper.doi && (
                   <a href={`https://doi.org/${paper.doi}`} target="_blank" rel="noreferrer">
                     doi:{paper.doi}

@@ -329,7 +329,6 @@ export default function Ask() {
                   onChange={(event) => setTopK(Number(event.target.value))}
                 />
               </label>
-              <span className="muted">Ctrl/⌘ + Enter to send</span>
               <button
                 type="submit"
                 className="btn btn-primary"
