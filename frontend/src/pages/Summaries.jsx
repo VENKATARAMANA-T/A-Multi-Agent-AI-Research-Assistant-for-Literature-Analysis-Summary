@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import api from '../api/client';
 import AgentTrace from '../components/AgentTrace';
+import HistoryPanel from '../components/HistoryPanel';
 import PaperPicker from '../components/PaperPicker';
 import VerificationBadge from '../components/VerificationBadge';
 import { BulletList, Card, ErrorBanner, Spinner, WarningBanner } from '../components/common';
@@ -12,6 +13,8 @@ export default function Summaries() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
+  // Bumped after a run so the history list picks up the new entry.
+  const [historyKey, setHistoryKey] = useState(0);
 
   const run = async () => {
     setBusy(true);
@@ -23,6 +26,7 @@ export default function Summaries() {
         throw new Error('Select exactly one paper for a single-paper summary.');
       }
       setResult(await api.summarize({ paper_ids: paperIds, scope }));
+      setHistoryKey((n) => n + 1);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -196,6 +200,12 @@ export default function Summaries() {
           <Card title="Corpus scope">
             <PaperPicker mode={scope === 'single' ? 'single' : 'multi'} compact />
           </Card>
+
+          <HistoryPanel
+            intents={['summarize', 'multi_summarize']}
+            refreshKey={historyKey}
+            onOpen={(saved) => setResult(saved)}
+          />
         </aside>
       </div>
     </div>

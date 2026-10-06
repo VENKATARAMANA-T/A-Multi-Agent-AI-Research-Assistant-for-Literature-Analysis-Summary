@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import api from '../api/client';
 import AgentTrace from '../components/AgentTrace';
+import HistoryPanel from '../components/HistoryPanel';
 import PaperPicker from '../components/PaperPicker';
 import { Card, ErrorBanner, Spinner, WarningBanner } from '../components/common';
 import { useCorpus } from '../context/CorpusContext';
@@ -18,6 +19,8 @@ export default function Extraction() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
+  // Bumped after a run so the history list picks up the new entry.
+  const [historyKey, setHistoryKey] = useState(0);
   const [tab, setTab] = useState('comparison');
 
   const run = async () => {
@@ -26,6 +29,7 @@ export default function Extraction() {
     setResult(null);
     try {
       setResult(await api.extract({ paper_ids: effectiveIds }));
+      setHistoryKey((n) => n + 1);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -217,6 +221,12 @@ export default function Extraction() {
           <Card title="Corpus scope">
             <PaperPicker compact />
           </Card>
+
+          <HistoryPanel
+            intents={['extract']}
+            refreshKey={historyKey}
+            onOpen={(saved) => setResult(saved)}
+          />
         </aside>
       </div>
     </div>

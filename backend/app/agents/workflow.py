@@ -204,9 +204,16 @@ def _persist_run(
         from app.database import session_scope
         from app.models import AgentRun
 
+        # The retrieved passages are kept alongside the answer so a run reopened
+        # from history renders exactly as it did when it ran. Without them the
+        # citations survive but the evidence behind them does not, and a saved
+        # answer becomes less checkable than a fresh one.
         payload = {
             key: result.get(key)
-            for key in ("answer", "summary", "extraction", "gaps", "graph")
+            for key in (
+                "answer", "summary", "extraction", "gaps", "graph",
+                "retrieved", "graph_facts", "graph_matches", "documents",
+            )
             if result.get(key)
         }
         with session_scope() as session:

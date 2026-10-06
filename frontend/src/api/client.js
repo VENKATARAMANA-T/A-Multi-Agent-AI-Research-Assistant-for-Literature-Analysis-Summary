@@ -214,6 +214,12 @@ export const api = {
   review: (payload) => request('/api/agents/review', { method: 'POST', body: payload }),
   listRuns: (params) => request(`/api/agents/runs${toQuery(params)}`),
 
+  // --- saved results --------------------------------------------------------
+  listHistory: (params) => request(`/api/history${toQuery(params)}`),
+  getHistory: (id) => request(`/api/history/${id}`),
+  deleteHistory: (id) => request(`/api/history/${id}`, { method: 'DELETE' }),
+  clearHistory: (params) => request(`/api/history${toQuery(params)}`, { method: 'DELETE' }),
+
   // --- verification ---------------------------------------------------------
   verify: (payload) => request('/api/verify', { method: 'POST', body: payload }),
   listVerifications: (params) => request(`/api/verify${toQuery(params)}`),

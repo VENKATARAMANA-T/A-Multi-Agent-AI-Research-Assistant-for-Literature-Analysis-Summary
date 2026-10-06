@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../api/client';
 import AgentTrace from '../components/AgentTrace';
 import AuthImage from '../components/AuthImage';
+import HistoryPanel from '../components/HistoryPanel';
 import PaperPicker from '../components/PaperPicker';
 import VerificationBadge from '../components/VerificationBadge';
 import { Badge, Card, ErrorBanner, Spinner, WarningBanner, statusTone } from '../components/common';
@@ -32,6 +33,8 @@ export default function Ask() {
   const [mode, setMode] = useState('hybrid');
   const [topK, setTopK] = useState(8);
   const [busy, setBusy] = useState(false);
+  // Bumped after a question so the history list picks up the new entry.
+  const [historyKey, setHistoryKey] = useState(0);
   const [error, setError] = useState(null);
   const [history, setHistory] = useState([]);
   const bottomRef = useRef(null);
@@ -55,6 +58,7 @@ export default function Ask() {
         mode,
       });
       setHistory((current) => [...current, { question: text, result }]);
+      setHistoryKey((n) => n + 1);
       setQuestion('');
     } catch (err) {
       setError(err.message);
@@ -344,6 +348,21 @@ export default function Ask() {
           <Card title="Corpus scope">
             <PaperPicker compact />
           </Card>
+
+          <HistoryPanel
+            intents={['qa']}
+            refreshKey={historyKey}
+            title="Past questions"
+            empty="Questions you ask are saved here, with their answers."
+            onOpen={(saved) =>
+              // Appended rather than replacing the thread: a reopened answer
+              // joins the conversation you are already having.
+              setHistory((current) => [
+                ...current,
+                { question: saved.question || saved.label, result: saved },
+              ])
+            }
+          />
         </aside>
       </div>
     </div>

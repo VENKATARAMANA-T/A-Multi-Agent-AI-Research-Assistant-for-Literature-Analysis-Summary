@@ -333,6 +333,41 @@ class DiscoveryResponse(BaseModel):
     searched_papers: list[str] = Field(default_factory=list)
 
 
+class HistoryItem(BaseModel):
+    id: str
+    intent: str
+    label: str
+    paper_count: int = 0
+    status: str = "completed"
+    duration_ms: int = 0
+    has_error: bool = False
+    created_at: datetime
+
+
+class HistoryDetail(BaseModel):
+    id: str
+    run_id: str
+    intent: str
+    label: str
+    question: Optional[str] = None
+    paper_ids: list[str] = Field(default_factory=list)
+    status: str = "completed"
+    duration_ms: int = 0
+    created_at: datetime
+
+    answer: Optional[dict[str, Any]] = None
+    summary: Optional[dict[str, Any]] = None
+    extraction: Optional[dict[str, Any]] = None
+    gaps: Optional[dict[str, Any]] = None
+    graph: Optional[dict[str, Any]] = None
+    retrieved: list[dict[str, Any]] = Field(default_factory=list)
+    graph_facts: list[dict[str, Any]] = Field(default_factory=list)
+    graph_matches: list[dict[str, Any]] = Field(default_factory=list)
+    documents: list[dict[str, Any]] = Field(default_factory=list)
+    trace: list[dict[str, Any]] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
 class AgentRunResponse(BaseModel):
     run_id: Optional[str] = None
     intent: str
