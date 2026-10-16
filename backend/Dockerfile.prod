@@ -1,4 +1,7 @@
-# Production image for a managed host (Hugging Face Spaces, Render, Fly).
+# Production image for a managed host (Render, Koyeb, Scaleway, Fly).
+#
+# Note: Hugging Face Spaces is NOT an option on a free account — Docker Spaces
+# require PRO as of 2026. Static Spaces are the only free kind.
 #
 # Three differences from the development Dockerfile, all forced by platforms
 # that give you a container and nothing else:
@@ -6,7 +9,7 @@
 #   1. No torch. Embeddings run through fastembed on ONNX Runtime, which the
 #      OCR engine already needs. 3.91 GB -> ~700 MB, ~2 GB RAM -> ~500 MB.
 #   2. Multi-stage, so the compiler toolchain never reaches the final image.
-#   3. Listens on $PORT. Every managed host assigns one; HF Spaces uses 7860.
+#   3. Listens on $PORT, which the platform assigns at run time.
 #
 # State lives in Postgres, a remote Chroma and an S3 bucket, so this image is
 # disposable by design — nothing here needs to survive a restart.
@@ -40,11 +43,19 @@ ENV PYTHONUNBUFFERED=1 \
     STORAGE_BACKEND=s3 \
     CHROMA_MODE=http \
     ENVIRONMENT=production \
-    PORT=7860 \
-    # glibc gives every thread its own malloc arena, and this process runs a
-    # thread pool. Capping the arenas reclaims 100-200 MB of resident memory
-    # that is never handed back otherwise.
+    PORT=8000 \
+    OCR_ENABLED=false \
     MALLOC_ARENA_MAX=2
+
+# Two of those deserve an explanation.
+#
+# OCR_ENABLED=false: RapidOCR costs 150-250 MB resident, which does not fit
+# beside the embedder in a 512 MB instance. Scanned PDFs are the price of the
+# free tier — set it back to true wherever there is more headroom.
+#
+# MALLOC_ARENA_MAX=2: glibc gives every thread its own malloc arena and this
+# process runs a thread pool, so resident memory climbs and is never handed
+# back. Capping the arenas reclaims 100-200 MB.
 
 # Runtime libraries only: opencv (via the OCR engine) links against these.
 # build-essential stays in the build stage.
@@ -70,7 +81,7 @@ RUN useradd --create-home --uid 1000 app \
     && chown -R app:app /app /home/app
 USER app
 
-EXPOSE 7860
+EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD curl -fsS http://127.0.0.1:${PORT}/api/health || exit 1
