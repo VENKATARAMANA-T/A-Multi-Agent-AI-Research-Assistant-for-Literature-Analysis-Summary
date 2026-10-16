@@ -554,6 +554,12 @@ Coverage:
 - **`test_graphrag.py`** — entity linking including acronyms, subgraph expansion, that a
   question with no matching entity falls back to text rather than returning nothing, alias
   de-duplication, and that graph context is scoped to the selected papers
+- **`test_auth.py`** — registration, activation-link expiry, that an activation token cannot
+  be used as a session token, that a wrong password and an unknown account are
+  indistinguishable, and that one account cannot reach another's papers
+- **`test_history.py`** — that past runs, summaries and verifications are scoped to their owner
+- **`test_literature_review.py`** — the three-call section grouping, and that a citation marker
+  pointing at a paper outside the corpus is dropped rather than rendered
 - **`test_lbd.py`** — reproduces Swanson's fish-oil/Raynaud's finding in miniature, and pins
   the rules that make it a discovery: an already-stated link is rejected, shared papers are not
   disjoint literatures, hub terms are discounted below specific ones, and an acronym merges
@@ -577,10 +583,13 @@ against genuine PDF structure.
 ```
 backend/
   app/
-    agents/        prompts, per-agent nodes, LangGraph workflow, output cleanup
-    api/           routers: papers, agents, graph, reports, system
-    services/      pdf_extract, chunking, embeddings, vector_store, llm,
-                   graph_store, ingestion, report
+    agents/        prompts, per-agent nodes, LangGraph workflow, output cleanup,
+                   verification, hypothesis, figure, matrix, explain
+    api/           routers: auth, papers, jobs, figures, agents, graph, reader,
+                   matrix, discovery, lbd, verify, review, reports, history, system
+    services/      pdf_extract, ocr, figures, chunking, embeddings, vector_store,
+                   llm, llm_cache, graph_store, graph_retrieval, lbd, discovery,
+                   highlight, citations, storage, ingestion, report, jobs
     config.py      pydantic-settings
     models.py      SQLModel tables
     schemas.py     API request/response models
@@ -591,8 +600,10 @@ frontend/
     api/           fetch client
     components/    Layout, PaperPicker, AgentTrace, shared UI
     context/       corpus + selection state
-    pages/         Dashboard, Upload, Library, Ask, Summaries,
-                   Extraction, Gaps, GraphView, Reports
+    pages/         Home, SignIn, SignUp, Activate, Dashboard, Upload, Library,
+                   Ask, Reader, Summaries, Extraction, Figures, Matrix,
+                   Discover, Hypotheses, Gaps, GraphView, LiteratureReview,
+                   Reports, Profile
 docker-compose.yml
 ```
 
