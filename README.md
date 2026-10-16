@@ -1,5 +1,7 @@
 # ResearchCompass
 
+**▶ [Watch the demo](https://youtu.be/oiZK3WZI8sc)**
+
 A multi-agent AI research assistant for literature analysis. Upload research papers and
 ResearchCompass extracts their text, chunks and embeds it, indexes it in a vector store, and
 turns a team of specialised agents loose on it — answering questions with citations,
@@ -8,25 +10,27 @@ identifying research gaps, reading figures, proposing hypotheses the corpus only
 fact-checking its own output, and exporting a literature review as Markdown or PDF.
 
 ```
-                    ┌──────────────────────── React + Vite ────────────────────────┐
-                    │ Upload · Library · Ask · Summaries · Extraction · Gaps ·     │
-                    │ Knowledge Graph · Reports                                    │
-                    └───────────────────────────┬─────────────────────────────────┘
-                                                │ REST
-                    ┌───────────────────────────┴─────────────────────────────────┐
-                    │                    FastAPI backend                          │
-                    │                                                             │
-   PDF ─▶ PyMuPDF ─▶ chunking ─▶ MiniLM embeddings ─▶ ChromaDB                    │
-                    │                                    │                        │
-                    │                    ┌───────────────┴──────────────┐         │
-                    │                    │   LangGraph orchestration     │        │
-                    │                    │  retrieval · summarization ·  │        │
-                    │                    │  extraction · QA · gaps ·     │─▶ Gemini│
-                    │                    │  knowledge graph              │        │
-                    │                    └───────────────┬──────────────┘         │
-                    │                                    │                        │
-                    │              SQLite (metadata)     └──▶ Neo4j (graph)       │
-                    └─────────────────────────────────────────────────────────────┘
+                ┌─────────────────────── React + Vite ────────────────────────┐
+                │ Upload · Library · Ask · Reader · Summaries · Extraction ·  │
+                │ Figures · Matrix · Discover · Hypotheses · Gaps ·           │
+                │ Knowledge Graph · Review · Reports                          │
+                └──────────────────────────┬──────────────────────────────────┘
+                                           │ REST + SSE
+                ┌──────────────────────────┴──────────────────────────────────┐
+                │                     FastAPI backend                         │
+                │                                                             │
+   PDF ─▶ PyMuPDF ─▶ OCR ─▶ figures ─▶ chunking ─▶ MiniLM ─▶ ChromaDB        │
+                │                                   │                         │
+                │                   ┌───────────────┴───────────────┐         │
+                │                   │    LangGraph orchestration     │        │
+                │                   │  retrieval · GraphRAG · QA ·   │        │
+                │                   │  summarize · extract · gaps ·  │─▶ Gemini│
+                │                   │  graph · figures · hypothesis ·│        │
+                │                   │  verification                  │        │
+                │                   └───────────────┬───────────────┘         │
+                │                                   │                         │
+                │             SQLite (metadata)     └──▶ Neo4j (graph)        │
+                └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -506,7 +510,7 @@ cd backend
 .venv\Scripts\python -m pytest
 ```
 
-425 tests, no network access required — the suite runs against an isolated temp directory with
+491 tests, no network access required — the suite runs against an isolated temp directory with
 the offline embedder, Neo4j disabled, and a mocked Gemini client.
 
 Coverage:
