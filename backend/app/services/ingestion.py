@@ -11,6 +11,7 @@ from sqlmodel import Session, delete, select
 
 from app.config import settings
 from app.models import Chunk, ExtractionRecord, Paper, PaperStatus, SummaryRecord, utcnow
+from app.services import storage
 from app.services.chunking import chunk_document
 from app.services.pdf_extract import extract_pdf
 from app.services.vector_store import get_vector_store
@@ -106,9 +107,12 @@ def store_upload(
     session.commit()
     session.refresh(paper)
 
-    destination = Path(settings.upload_dir) / f"{paper.id}.pdf"
-    destination.write_bytes(data)
-    paper.file_path = str(destination)
+    # A storage key, not an absolute path: the local backend resolves it to the
+    # same place it always wrote, and an object-store backend keeps the row
+    # meaningful on a host whose disk does not survive a restart.
+    key = storage.upload_key(paper.id)
+    storage.get_storage().put(key, data)
+    paper.file_path = key
     session.add(paper)
     session.commit()
     session.refresh(paper)
@@ -130,7 +134,10 @@ def process_paper(session: Session, paper_id: str) -> Paper:
 
         # The content hash keys the OCR cache, so re-ingesting a scanned paper
         # skips recognition entirely.
-        document = extract_pdf(paper.file_path, doc_id=paper.content_hash)
+        source = storage.path_for(paper.file_path)
+        if source is None:
+            raise IngestionError("The stored PDF for this paper is no longer retrievable.")
+        document = extract_pdf(source, doc_id=paper.content_hash)
         if not document.text.strip():
             raise IngestionError(_no_text_message(document))
 
@@ -254,7 +261,10 @@ def delete_paper(session: Session, paper_id: str) -> bool:
         logger.warning("Could not delete graph nodes for paper %s", paper_id, exc_info=True)
 
     if paper.file_path:
-        Path(paper.file_path).unlink(missing_ok=True)
+        if Path(paper.file_path).is_absolute():
+            Path(paper.file_path).unlink(missing_ok=True)  # pre-storage-layer row
+        else:
+            storage.get_storage().delete(paper.file_path)
 
     session.delete(paper)
     session.commit()

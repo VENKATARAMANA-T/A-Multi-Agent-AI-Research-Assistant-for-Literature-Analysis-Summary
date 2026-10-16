@@ -13,6 +13,7 @@ from app.agents.state import condense_paper_text, format_paper_context
 from app.agents.workflow import run_workflow
 from app.api.deps import current_user, owned_paper_ids
 from app.database import get_session
+from app.services import storage
 from app.models import Paper, PaperStatus, Report, User
 from app.schemas import ReportDetail, ReportRequest, ReportSummary
 from app.services.graph_store import get_graph_store
@@ -118,7 +119,7 @@ def create_report(
 
     try:
         pdf_file = export_pdf(markdown, report_path(report.id), title)
-        report.pdf_path = str(pdf_file)
+        report.pdf_path = storage.publish_report(report.id, pdf_file)
         session.add(report)
         session.commit()
         session.refresh(report)
@@ -146,7 +147,7 @@ def list_reports(
             title=report.title,
             kind=report.kind,
             paper_ids=report.paper_ids,
-            has_pdf=bool(report.pdf_path and Path(report.pdf_path).exists()),
+            has_pdf=storage.path_for(report.pdf_path) is not None,
             agent_status=report.agent_status,
             agent_errors=report.agent_errors or [],
             created_at=report.created_at,
@@ -194,11 +195,12 @@ def get_report_pdf(
     if report is None or report.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Report not found.")
 
-    path = Path(report.pdf_path) if report.pdf_path else report_path(report.id)
-    if not path.exists():
+    path = storage.path_for(report.pdf_path)
+    if path is None:
         try:
-            path = export_pdf(report.markdown, report_path(report.id), report.title)
-            report.pdf_path = str(path)
+            rendered = export_pdf(report.markdown, report_path(report.id), report.title)
+            report.pdf_path = storage.publish_report(report.id, rendered)
+            path = storage.path_for(report.pdf_path)
             session.add(report)
             session.commit()
         except Exception as exc:
@@ -220,8 +222,7 @@ def delete_report(
     report = session.get(Report, report_id)
     if report is None or report.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Report not found.")
-    if report.pdf_path:
-        Path(report.pdf_path).unlink(missing_ok=True)
+    storage.forget(report.pdf_path)
     session.delete(report)
     session.commit()
     return Response(status_code=204)
@@ -233,7 +234,7 @@ def _detail(report: Report) -> ReportDetail:
         title=report.title,
         kind=report.kind,
         paper_ids=report.paper_ids,
-        has_pdf=bool(report.pdf_path and Path(report.pdf_path).exists()),
+        has_pdf=storage.path_for(report.pdf_path) is not None,
         agent_status=report.agent_status,
         agent_errors=report.agent_errors or [],
         created_at=report.created_at,

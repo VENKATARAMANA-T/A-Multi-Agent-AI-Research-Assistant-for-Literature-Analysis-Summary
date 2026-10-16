@@ -62,16 +62,47 @@ class RetrievedChunk:
         return title
 
 
+def _build_client(persist_dir: str):
+    """An on-disk Chroma, or a remote one when the host has no durable disk.
+
+    Both speak the same collection API, so only construction differs — which is
+    why switching to a hosted Chroma costs nothing beyond this function.
+    """
+    if (settings.chroma_mode or "local").lower() != "http":
+        return chromadb.PersistentClient(
+            path=persist_dir,
+            settings=ChromaSettings(anonymized_telemetry=False, allow_reset=True),
+        )
+
+    if not settings.chroma_host:
+        raise RuntimeError("CHROMA_MODE is 'http' but CHROMA_HOST is not set.")
+
+    headers = {"x-chroma-token": settings.chroma_api_key} if settings.chroma_api_key else None
+    kwargs: dict = {
+        "host": settings.chroma_host,
+        "port": settings.chroma_port,
+        "ssl": settings.chroma_ssl,
+        "headers": headers,
+        "settings": ChromaSettings(anonymized_telemetry=False),
+    }
+    # Tenant and database are only meaningful on a multi-tenant server; passing
+    # them to one that has no such concept is an error rather than a no-op.
+    if settings.chroma_tenant:
+        kwargs["tenant"] = settings.chroma_tenant
+    if settings.chroma_database:
+        kwargs["database"] = settings.chroma_database
+
+    logger.info("Vector store: remote Chroma at %s", settings.chroma_host)
+    return chromadb.HttpClient(**kwargs)
+
+
 class VectorStore:
     """Thin wrapper over a persistent Chroma collection."""
 
     def __init__(self, persist_dir: str | None = None, collection_name: str | None = None) -> None:
         self._persist_dir = str(persist_dir or settings.chroma_dir)
         self._collection_name = collection_name or settings.chroma_collection
-        self._client = chromadb.PersistentClient(
-            path=self._persist_dir,
-            settings=ChromaSettings(anonymized_telemetry=False, allow_reset=True),
-        )
+        self._client = _build_client(self._persist_dir)
         self._collection = self._client.get_or_create_collection(
             name=self._collection_name,
             metadata={"hnsw:space": "cosine", **self._backend_stamp()},

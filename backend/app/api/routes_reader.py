@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 from app.agents.explain import explain as run_explain
 from app.api.deps import current_user, owned_paper, owned_paper_ids
 from app.database import get_session
+from app.services import storage
 from app.models import Chunk, Paper, User
 from app.schemas import (
     CitationResponse,
@@ -46,7 +47,8 @@ def highlight(
     paper = owned_paper(session, user, paper_id)
     if paper is None:
         raise HTTPException(status_code=404, detail="Paper not found.")
-    if not paper.file_path or not Path(paper.file_path).exists():
+    source = storage.path_for(paper.file_path)
+    if source is None:
         raise HTTPException(status_code=404, detail="The stored PDF file is missing.")
 
     needle = text
@@ -78,7 +80,7 @@ def highlight(
         raise HTTPException(status_code=400, detail="Provide chunk_id, figure_id or text.")
 
     try:
-        result = find_highlight(paper.file_path, needle, page_number=hint)
+        result = find_highlight(source, needle, page_number=hint)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

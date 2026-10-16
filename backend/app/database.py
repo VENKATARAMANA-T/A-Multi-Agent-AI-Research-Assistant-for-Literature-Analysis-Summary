@@ -1,4 +1,8 @@
-"""SQLite/SQLModel engine and session helpers."""
+"""SQLModel engine and session helpers.
+
+SQLite by default; any SQLAlchemy URL works, which is what lets a deployment
+point `DATABASE_URL` at a managed Postgres without touching the models.
+"""
 
 from __future__ import annotations
 
@@ -20,6 +24,13 @@ if settings.sqlalchemy_url.startswith("sqlite"):
     _connect_args = {"check_same_thread": False}
     if ":memory:" in settings.sqlalchemy_url:
         _engine_kwargs["poolclass"] = StaticPool
+else:
+    # Managed Postgres (Neon, Supabase) parks idle connections and the server
+    # closes them without telling the client. Without pre-ping the first query
+    # after a quiet period dies on a stale socket, which looks like a random
+    # 500 rather than a connection problem. Recycle well inside their window.
+    _engine_kwargs["pool_pre_ping"] = True
+    _engine_kwargs["pool_recycle"] = 280
 
 engine = create_engine(
     settings.sqlalchemy_url,
@@ -125,13 +136,23 @@ def _model_default(table_name: str, column_name: str):
     return None
 
 
+def _boolean_literal(value: bool) -> str:
+    """Render a boolean the way this database spells it."""
+    if engine.dialect.supports_native_boolean:
+        return "TRUE" if value else "FALSE"
+    return "1" if value else "0"
+
+
 def _backfill_statement(table_name: str, column) -> str | None:
     default = _model_default(table_name, column.name)
     if default is None:
         return None
 
     if isinstance(default, bool):
-        literal = "1" if default else "0"
+        # SQLite stores booleans as integers and accepts 1/0; Postgres has a
+        # real boolean type and rejects `SET flag = 1` outright. Ask the dialect
+        # rather than assuming, so one statement serves both.
+        literal = _boolean_literal(default)
     elif isinstance(default, (int, float)):
         literal = str(default)
     elif isinstance(default, str):

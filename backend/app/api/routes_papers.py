@@ -13,7 +13,7 @@ from sqlmodel import Session, select
 
 from app.api.deps import current_user, owned_paper, owned_paper_ids
 from app.database import get_session, session_scope
-from app.services import jobs
+from app.services import jobs, storage
 from app.models import Chunk, Paper, PaperStatus, User
 from app.schemas import (
     PaperSummary,
@@ -244,8 +244,8 @@ def download_paper(
     user: User = Depends(current_user),
 ) -> FileResponse:
     paper = owned_paper(session, user, paper_id)
-    path = Path(paper.file_path)
-    if not path.exists():
+    path = storage.path_for(paper.file_path)
+    if path is None:
         raise HTTPException(status_code=404, detail="The stored PDF file is missing.")
     return FileResponse(path, media_type="application/pdf", filename=paper.filename)
 

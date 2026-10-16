@@ -1,0 +1,60 @@
+# Production dependencies for a managed host.
+#
+# The difference from requirements.txt is what is *absent*: torch,
+# transformers and sentence-transformers. Embeddings go through fastembed,
+# which runs the same all-MiniLM-L6-v2 model on ONNX Runtime — a runtime the
+# OCR engine already loads, so this removes a duplicate ML stack rather than
+# adding one. The image drops from 3.91 GB to roughly 700 MB and resident
+# memory from ~2 GB to ~500 MB, which is what makes a free tier viable.
+#
+# Set EMBEDDING_BACKEND=fastembed alongside this file. With torch absent and
+# the setting left on "auto", get_embedder() would fall through to the hashing
+# embedder and retrieval quality would quietly collapse.
+
+# --- Web framework -----------------------------------------------------------
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# --- Persistence -------------------------------------------------------------
+SQLModel==0.0.22
+sqlalchemy==2.0.36
+# Managed Postgres (Neon, Supabase) instead of a local SQLite file.
+psycopg[binary]==3.2.3
+
+# --- PDF / text extraction ---------------------------------------------------
+PyMuPDF==1.25.1
+
+# --- OCR for scanned pages ---------------------------------------------------
+rapidocr-onnxruntime==1.2.3
+pillow==10.4.0
+
+# --- Chunking ----------------------------------------------------------------
+langchain-text-splitters==0.3.4
+
+# --- Embeddings + vector store ----------------------------------------------
+chromadb==0.5.23
+fastembed==0.5.1
+
+# --- Object storage ----------------------------------------------------------
+# S3-compatible: Cloudflare R2, Backblaze B2, MinIO, AWS.
+boto3==1.35.81
+
+# --- Multi-agent orchestration ----------------------------------------------
+langgraph==0.2.60
+
+# --- LLM ---------------------------------------------------------------------
+google-genai==0.3.0
+
+# --- Knowledge graph ---------------------------------------------------------
+neo4j==5.27.0
+
+# --- Reports -----------------------------------------------------------------
+markdown==3.7
+reportlab==4.2.5
+
+# --- Misc --------------------------------------------------------------------
+httpx==0.28.1
+tenacity==9.0.0

@@ -16,6 +16,7 @@ from sqlmodel import Session, delete, select
 
 from app.config import settings
 from app.models import Figure, FigureStatus, Paper
+from app.services import storage
 from app.services.figures import ExtractedFigure, extract_figures
 
 logger = logging.getLogger(__name__)
@@ -60,9 +61,9 @@ def store_figures(
         session.refresh(row)
 
         if item.image_png:
-            destination = figure_dir(paper.id) / f"{row.id}.png"
-            destination.write_bytes(item.image_png)
-            row.image_path = str(destination)
+            key = storage.figure_key(paper.id, row.id)
+            storage.get_storage().put(key, item.image_png)
+            row.image_path = key
             session.add(row)
             session.commit()
             session.refresh(row)
@@ -77,8 +78,12 @@ def clear_figures(session: Session, paper_id: str, remove_files: bool = True) ->
     existing = list(session.exec(select(Figure).where(Figure.paper_id == paper_id)).all())
     if remove_files:
         for row in existing:
-            if row.image_path:
-                Path(row.image_path).unlink(missing_ok=True)
+            if not row.image_path:
+                continue
+            if Path(row.image_path).is_absolute():
+                Path(row.image_path).unlink(missing_ok=True)  # pre-storage-layer row
+            else:
+                storage.get_storage().delete(row.image_path)
     session.exec(delete(Figure).where(Figure.paper_id == paper_id))
     session.commit()
 
@@ -120,7 +125,7 @@ def pending_figures(session: Session, paper_ids: list[str] | None = None) -> lis
         statement = statement.where(Figure.paper_id.in_(paper_ids))  # type: ignore[attr-defined]
     rows = list(session.exec(statement).all())
     # Without an image there is nothing to look at.
-    return [row for row in rows if row.image_path and Path(row.image_path).exists()]
+    return [row for row in rows if storage.path_for(row.image_path) is not None]
 
 
 def extract_and_store(session: Session, paper: Paper) -> list[Figure]:
@@ -128,8 +133,11 @@ def extract_and_store(session: Session, paper: Paper) -> list[Figure]:
     if not settings.figures_enabled:
         return []
     try:
+        source = storage.path_for(paper.file_path)
+        if source is None:
+            return []
         extracted = extract_figures(
-            paper.file_path,
+            source,
             dpi=settings.figure_dpi,
             max_figures=settings.figure_max_per_document,
         )

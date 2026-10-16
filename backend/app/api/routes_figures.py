@@ -13,6 +13,7 @@ from app.agents.figure import analyse_many
 from app.api.deps import current_user, owned_paper, owned_paper_ids
 from app.config import settings
 from app.database import get_session
+from app.services import storage
 from app.models import AgentRun, Figure, FigureStatus, Paper, PaperStatus, User
 from app.schemas import (
     FigureAnalysisRequest,
@@ -118,16 +119,25 @@ def analyse(
         paper.id: paper.title
         for paper in session.exec(select(Paper).where(Paper.owner_id == user.id)).all()
     }
+    # `selected` is rebuilt alongside `items` because the results come back
+    # positionally: dropping an unreadable image from one list and not the
+    # other would attach every analysis to the wrong figure.
     items = []
+    readable: list[Figure] = []
     for figure in selected:
+        image = storage.path_for(figure.image_path)
+        if image is None:
+            continue
+        readable.append(figure)
         items.append(
             {
-                "image_png": Path(figure.image_path).read_bytes(),
+                "image_png": image.read_bytes(),
                 "label": figure.label or "Figure",
                 "caption": figure.caption or "",
                 "paper_title": titles.get(figure.paper_id),
             }
         )
+    selected = readable
 
     results, delta = analyse_many(items)
 
@@ -190,10 +200,11 @@ def get_image(
     if figure is None:
         raise HTTPException(status_code=404, detail="Figure not found.")
     owned_paper(session, user, figure.paper_id)
-    if not figure.image_path or not Path(figure.image_path).exists():
+    image = storage.path_for(figure.image_path)
+    if image is None:
         raise HTTPException(status_code=404, detail="No image was rendered for this figure.")
     return FileResponse(
-        figure.image_path,
+        image,
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=86400"},
     )

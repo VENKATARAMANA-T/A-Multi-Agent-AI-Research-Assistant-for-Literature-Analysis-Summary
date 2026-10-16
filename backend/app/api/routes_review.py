@@ -13,6 +13,7 @@ from sqlmodel import Session, desc, select
 from app.agents.literature_review import generate
 from app.api.deps import current_user, owned_paper_ids
 from app.database import get_session
+from app.services import storage
 from app.models import Paper, PaperStatus, Report, User
 from app.schemas import (
     LiteratureReviewRequest,
@@ -36,7 +37,7 @@ def _summary(report: Report) -> LiteratureReviewSummary:
         section_count=len(report.sections or []),
         citation_count=len(report.citations or []),
         agent_status=report.agent_status,
-        has_pdf=bool(report.pdf_path and Path(report.pdf_path).exists()),
+        has_pdf=storage.path_for(report.pdf_path) is not None,
         created_at=report.created_at,
     )
 
@@ -124,7 +125,7 @@ def create_review(
         # should not need a fourth request before it can be handed to anyone.
         try:
             path = export_pdf(report.markdown, report_path(report.id), report.title)
-            report.pdf_path = str(path)
+            report.pdf_path = storage.publish_report(report.id, path)
             session.add(report)
             session.commit()
         except Exception:  # pragma: no cover - reportlab edge cases
@@ -203,12 +204,13 @@ def get_pdf(
 ) -> FileResponse:
     report = _owned(session, user, review_id)
 
-    path = Path(report.pdf_path) if report.pdf_path else report_path(report.id)
-    if not path.exists():
+    path = storage.path_for(report.pdf_path)
+    if path is None:
         # Rendered on demand when the eager write failed or the file was swept up.
         try:
-            path = export_pdf(report.markdown, path, report.title)
-            report.pdf_path = str(path)
+            rendered = export_pdf(report.markdown, report_path(report.id), report.title)
+            report.pdf_path = storage.publish_report(report.id, rendered)
+            path = storage.path_for(report.pdf_path)
             session.add(report)
             session.commit()
         except Exception as exc:  # pragma: no cover

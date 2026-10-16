@@ -37,6 +37,32 @@ class Settings(BaseSettings):
     figure_dir: Path = BACKEND_ROOT / "data" / "figures"
     database_url: str = ""  # defaults to sqlite in data_dir
 
+    # "local" keeps PDFs, figure images and report PDFs on disk, which is right
+    # for a machine that owns its filesystem. "s3" stores them in an
+    # S3-compatible bucket (R2, B2, MinIO) instead, for hosts whose disk is
+    # wiped on every restart. The cache directory below is where objects are
+    # materialised on demand: PyMuPDF and FileResponse both need a real path,
+    # so reads always end at a local file either way.
+    storage_backend: str = "local"
+    storage_cache_dir: Path = BACKEND_ROOT / "data" / "cache"
+    s3_bucket: str = ""
+    s3_endpoint_url: str = ""          # R2: https://<account>.r2.cloudflarestorage.com
+    s3_region: str = "auto"
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
+    s3_prefix: str = ""                # optional key prefix, e.g. "prod/"
+
+    # --- Vector store --------------------------------------------------------
+    # "local" is an on-disk Chroma collection. "http" talks to a Chroma server
+    # or Chroma Cloud, which is what a host without persistent disk needs.
+    chroma_mode: str = "local"
+    chroma_host: str = ""
+    chroma_port: int = 8000
+    chroma_ssl: bool = True
+    chroma_api_key: str = ""
+    chroma_tenant: str = ""
+    chroma_database: str = ""
+
     # --- Ingestion -----------------------------------------------------------
     max_upload_mb: int = 50
     chunk_size: int = 1200
@@ -228,6 +254,7 @@ class Settings(BaseSettings):
             self.chroma_dir,
             self.report_dir,
             self.figure_dir,
+            self.storage_cache_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 

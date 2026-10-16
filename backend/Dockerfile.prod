@@ -1,0 +1,80 @@
+# Production image for a managed host (Hugging Face Spaces, Render, Fly).
+#
+# Three differences from the development Dockerfile, all forced by platforms
+# that give you a container and nothing else:
+#
+#   1. No torch. Embeddings run through fastembed on ONNX Runtime, which the
+#      OCR engine already needs. 3.91 GB -> ~700 MB, ~2 GB RAM -> ~500 MB.
+#   2. Multi-stage, so the compiler toolchain never reaches the final image.
+#   3. Listens on $PORT. Every managed host assigns one; HF Spaces uses 7860.
+#
+# State lives in Postgres, a remote Chroma and an S3 bucket, so this image is
+# disposable by design — nothing here needs to survive a restart.
+
+FROM python:3.12-slim AS build
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Into a virtualenv rather than the system Python, so one COPY moves the whole
+# dependency set into the runtime stage and nothing else comes with it.
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements-prod.txt ./
+RUN pip install --upgrade pip && pip install -r requirements-prod.txt
+
+
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    HF_HOME=/home/app/.cache/huggingface \
+    FASTEMBED_CACHE_PATH=/home/app/.cache/fastembed \
+    EMBEDDING_BACKEND=fastembed \
+    STORAGE_BACKEND=s3 \
+    CHROMA_MODE=http \
+    ENVIRONMENT=production \
+    PORT=7860 \
+    # glibc gives every thread its own malloc arena, and this process runs a
+    # thread pool. Capping the arenas reclaims 100-200 MB of resident memory
+    # that is never handed back otherwise.
+    MALLOC_ARENA_MAX=2
+
+# Runtime libraries only: opencv (via the OCR engine) links against these.
+# build-essential stays in the build stage.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /opt/venv /opt/venv
+
+WORKDIR /app
+COPY app ./app
+
+# Warm the embedding and OCR models into the image so the first request does
+# not pay for a download. A host without build-time network still works: the
+# models are fetched on first use instead.
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding('sentence-transformers/all-MiniLM-L6-v2')" \
+    || echo 'Embedding model warm-up skipped; it will download on first use.'
+RUN python -c "from rapidocr_onnxruntime import RapidOCR; RapidOCR()" \
+    || echo 'OCR warm-up skipped; the engine will initialise at runtime.'
+
+RUN useradd --create-home --uid 1000 app \
+    && mkdir -p /app/data \
+    && chown -R app:app /app /home/app
+USER app
+
+EXPOSE 7860
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:${PORT}/api/health || exit 1
+
+# Shell form, because $PORT is assigned by the platform at run time and must
+# be expanded then rather than baked in at build time.
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT}

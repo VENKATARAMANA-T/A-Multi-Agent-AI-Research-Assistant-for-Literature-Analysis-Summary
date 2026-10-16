@@ -78,6 +78,18 @@ class UploadResponse(BaseModel):
     results: list[UploadResultItem]
 
 
+def _image_is_available(image_path: str | None) -> bool:
+    """Whether a figure's image can actually be served.
+
+    The column holds a storage key now, and held an absolute path before that;
+    `path_for` resolves either, so figures uploaded under the old scheme keep
+    reporting themselves correctly.
+    """
+    from app.services import storage
+
+    return storage.path_for(image_path) is not None
+
+
 class FigureSummary(BaseModel):
     id: str
     paper_id: str
@@ -117,7 +129,9 @@ class FigureSummary(BaseModel):
             page=figure.page,
             status=figure.status.value if hasattr(figure.status, "value") else str(figure.status),
             detector=figure.detector,
-            has_image=bool(figure.image_path and Path(figure.image_path).exists()),
+            # Imported here rather than at module scope: schemas is pulled in
+            # very early, and storage reaches back into the service layer.
+            has_image=_image_is_available(figure.image_path),
             table_markdown=figure.table_markdown,
             table_rows=figure.table_rows,
             table_cols=figure.table_cols,
